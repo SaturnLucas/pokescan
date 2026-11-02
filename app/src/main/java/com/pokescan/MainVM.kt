@@ -118,12 +118,12 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         return nf.format(usd * rate)
     }
 
-    fun setCurrency(code: String) {
+    fun changeCurrency(code: String) {
         currency = code
         prefs.currency = code
     }
 
-    fun setAutoScan(on: Boolean) {
+    fun changeAutoScan(on: Boolean) {
         autoScan = on
         prefs.autoScan = on
     }

@@ -375,7 +375,7 @@ fun ScanScreen(vm: MainVM) {
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
                 RoundIcon("🔦", active = torch) { torch = !torch }
-                RoundIcon(if (vm.autoScan) "⚡" else "✋", active = vm.autoScan) { vm.setAutoScan(!vm.autoScan) }
+                RoundIcon(if (vm.autoScan) "⚡" else "✋", active = vm.autoScan) { vm.changeAutoScan(!vm.autoScan) }
                 RoundIcon("🔎") { showSearch = true }
             }
         }
@@ -652,7 +652,7 @@ fun SettingsScreen(vm: MainVM) {
                     Surface(
                         shape = RoundedCornerShape(50),
                         color = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.clip(RoundedCornerShape(50)).clickable { vm.setCurrency(code) }
+                        modifier = Modifier.clip(RoundedCornerShape(50)).clickable { vm.changeCurrency(code) }
                     ) {
                         Text(
                             label,
@@ -683,7 +683,7 @@ fun SettingsScreen(vm: MainVM) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(checked = vm.autoScan, onCheckedChange = { vm.setAutoScan(it) })
+                Switch(checked = vm.autoScan, onCheckedChange = { vm.changeAutoScan(it) })
             }
         }
 
