@@ -2,6 +2,8 @@ package com.pokescan
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.net.Uri
 import android.provider.Settings
 import androidx.core.content.FileProvider
@@ -9,6 +11,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 object Config {
@@ -33,6 +36,24 @@ class Prefs(ctx: Context) {
     var ratesTime: Long
         get() = sp.getLong("ratesTime", 0L)
         set(v) { sp.edit().putLong("ratesTime", v).apply() }
+
+    var lastProfile: Long
+        get() = sp.getLong("lastProfile", -1L)
+        set(v) { sp.edit().putLong("lastProfile", v).apply() }
+
+    var bioProfile: Long
+        get() = sp.getLong("bioProfile", -1L)
+        set(v) { sp.edit().putLong("bioProfile", v).apply() }
+
+    /** Segundos em segundo plano antes de bloquear; -1 = nunca. */
+    var lockDelay: Int
+        get() = sp.getInt("lockDelay", 60)
+        set(v) { sp.edit().putInt("lockDelay", v).apply() }
+
+    fun getInt(k: String): Int = sp.getInt(k, 0)
+    fun putInt(k: String, v: Int) { sp.edit().putInt(k, v).apply() }
+    fun getLong(k: String): Long = sp.getLong(k, 0L)
+    fun putLong(k: String, v: Long) { sp.edit().putLong(k, v).apply() }
 }
 
 object Currencies {
@@ -88,7 +109,13 @@ object Currencies {
     }
 }
 
-data class UpdateInfo(val versionCode: Int, val versionName: String, val url: String, val notes: String)
+data class UpdateInfo(
+    val versionCode: Int,
+    val versionName: String,
+    val url: String,
+    val notes: String,
+    val sha256: String? = null
+)
 
 /** Atualização automática: consulta a última release do GitHub e instala o APK novo. */
 object Updater {
@@ -111,7 +138,9 @@ object Updater {
             for (i in 0 until assets.length()) {
                 val a = assets.getJSONObject(i)
                 if (a.getString("name").endsWith(".apk")) {
-                    return UpdateInfo(code, "1.$code", a.getString("browser_download_url"), o.optString("body"))
+                    val d = a.optString("digest")
+                    val sha = if (d.startsWith("sha256:")) d.removePrefix("sha256:") else null
+                    return UpdateInfo(code, "1.$code", a.getString("browser_download_url"), o.optString("body"), sha)
                 }
             }
             return null
@@ -119,6 +148,10 @@ object Updater {
     }
 
     fun download(ctx: Context, info: UpdateInfo, onProgress: (Float) -> Unit): File {
+        if (!info.url.startsWith("https://github.com/${Config.REPO}/releases/download/")) {
+            throw RuntimeException("Endereço de atualização não confiável")
+        }
+        val sha = MessageDigest.getInstance("SHA-256")
         val dir = File(ctx.cacheDir, "updates").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }
         val file = File(dir, "PokeScan-${info.versionCode}.apk")
@@ -134,13 +167,36 @@ object Updater {
                         val n = input.read(buf)
                         if (n < 0) break
                         out.write(buf, 0, n)
+                        sha.update(buf, 0, n)
                         read += n
                         if (total > 0) onProgress(read.toFloat() / total)
                     }
                 }
             }
         }
+        val hex = sha.digest().joinToString("") { "%02x".format(it) }
+        if (info.sha256 != null && !hex.equals(info.sha256, ignoreCase = true)) {
+            file.delete()
+            throw RuntimeException("Arquivo corrompido (checksum não confere)")
+        }
         return file
+    }
+
+    /** Só recusa se a assinatura do APK for DIFERENTE da do app instalado (o Android também confere ao instalar). */
+    fun signatureOk(ctx: Context, apk: File): Boolean {
+        if (Build.VERSION.SDK_INT < 28) return true
+        return try {
+            val pm = ctx.packageManager
+            val archive = pm.getPackageArchiveInfo(apk.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES)
+                ?: return true
+            if (archive.packageName != ctx.packageName) return false
+            val a = archive.signingInfo?.apkContentsSigners ?: return true
+            val own = pm.getPackageInfo(ctx.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+            val b = own.signingInfo?.apkContentsSigners ?: return true
+            a.map { it.toCharsString() }.toSet() == b.map { it.toCharsString() }.toSet()
+        } catch (e: Exception) {
+            true
+        }
     }
 
     fun canInstall(ctx: Context): Boolean = ctx.packageManager.canRequestPackageInstalls()

@@ -7,9 +7,13 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
         android:label="PokéScan"
-        android:theme="@style/Theme.PokeScan">
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.PokeScan"
+        android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"
             android:exported="true">

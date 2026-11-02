@@ -1,6 +1,7 @@
 package com.pokescan
 
 import android.app.Application
+import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
@@ -10,14 +11,22 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.text.NumberFormat
 import java.util.Currency
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
 
 sealed interface ScanState {
     object Idle : ScanState
@@ -27,11 +36,29 @@ sealed interface ScanState {
 
 data class Added(val card: OwnedCard, val isNew: Boolean)
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainVM(private val app: Application) : AndroidViewModel(app) {
     private val dao = AppDb.get(app).dao()
     private val prefs = Prefs(app)
 
-    val cards = dao.all().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    // ---- perfis / sessão ----
+    val profiles = dao.profiles().stateIn<List<Profile>?>(viewModelScope, SharingStarted.Eagerly, null)
+    var current by mutableStateOf<Profile?>(null)
+        private set
+    var authError by mutableStateOf<String?>(null)
+    var authBusy by mutableStateOf(false)
+        private set
+    var info by mutableStateOf<String?>(null)
+    var bioProfileId by mutableStateOf(prefs.bioProfile)
+        private set
+    var lockDelay by mutableIntStateOf(prefs.lockDelay)
+        private set
+    val lastProfileId: Long get() = prefs.lastProfile
+    private var holdUntil = 0L
+
+    private val profileFlow = MutableStateFlow(-1L)
+    val cards = profileFlow.flatMapLatest { dao.all(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // ---- escaneamento ----
     var state by mutableStateOf<ScanState>(ScanState.Idle)
@@ -51,7 +78,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     private var retryAt = 0L
 
     val wantsFrames: Boolean
-        get() = state == ScanState.Idle && (autoScan || forceNext)
+        get() = current != null && state == ScanState.Idle && (autoScan || forceNext)
 
     // ---- ajustes ----
     var currency by mutableStateOf(prefs.currency)
@@ -93,6 +120,261 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ================================================================ perfis e login
+
+    private fun lockLeftMs(id: Long): Long = max(0L, prefs.getLong("lockUntil_$id") - System.currentTimeMillis())
+
+    private fun startSession(p: Profile) {
+        current = p
+        profileFlow.value = p.id
+        prefs.lastProfile = p.id
+        authError = null
+        state = ScanState.Idle
+        added = null
+        message = null
+        lockedKey = null
+        candKey = null
+        candCount = 0
+    }
+
+    fun clearAuthError() { authError = null }
+
+    fun createProfile(name: String, avatar: String, pass: String, pass2: String) {
+        val n = name.trim()
+        authError = when {
+            n.isEmpty() -> "Digite um nome."
+            n.length > 20 -> "Nome muito longo (máx. 20 letras)."
+            pass.length < 4 -> "A senha precisa ter pelo menos 4 caracteres."
+            pass != pass2 -> "As senhas não conferem."
+            (profiles.value ?: emptyList()).any { it.name.equals(n, ignoreCase = true) } ->
+                "Já existe um perfil com esse nome."
+            else -> null
+        }
+        if (authError != null) return
+        authBusy = true
+        viewModelScope.launch {
+            try {
+                val salt = Crypto.randomBytes(16)
+                val hash = withContext(Dispatchers.Default) { Crypto.hashPassword(pass, salt) }
+                val id = dao.insertProfile(Profile(name = n, salt = Crypto.b64(salt), hash = hash, avatar = avatar))
+                dao.adoptLegacy(id)
+                dao.profile(id)?.let { startSession(it) }
+            } catch (e: Exception) {
+                authError = "Não consegui criar o perfil: ${e.message}"
+            }
+            authBusy = false
+        }
+    }
+
+    fun login(p: Profile, password: String) {
+        if (authBusy) return
+        val left = lockLeftMs(p.id)
+        if (left > 0) {
+            authError = "Muitas tentativas. Tente de novo em ${left / 1000 + 1}s."
+            return
+        }
+        authBusy = true
+        authError = null
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.Default) { Crypto.verify(password, p.salt, p.hash) }
+            if (ok) {
+                prefs.putInt("fails_${p.id}", 0)
+                startSession(p)
+            } else {
+                val f = prefs.getInt("fails_${p.id}") + 1
+                prefs.putInt("fails_${p.id}", f)
+                if (f % 5 == 0) {
+                    val secs = min(900L, 30L shl (f / 5 - 1).coerceAtMost(5))
+                    prefs.putLong("lockUntil_${p.id}", System.currentTimeMillis() + secs * 1000)
+                    authError = "Senha incorreta. Bloqueado por ${secs}s."
+                } else {
+                    authError = "Senha incorreta (${5 - f % 5} tentativas antes do bloqueio)."
+                }
+            }
+            authBusy = false
+        }
+    }
+
+    fun bioEnabledFor(p: Profile): Boolean = bioProfileId == p.id
+
+    fun loginBiometric(p: Profile) {
+        if (bioProfileId == p.id) {
+            prefs.putInt("fails_${p.id}", 0)
+            startSession(p)
+        }
+    }
+
+    fun changeBiometric(on: Boolean) {
+        val p = current ?: return
+        val v = if (on) p.id else -1L
+        prefs.bioProfile = v
+        bioProfileId = v
+    }
+
+    fun logout() {
+        current = null
+        profileFlow.value = -1L
+        state = ScanState.Idle
+        added = null
+        message = null
+        info = null
+    }
+
+    /** Mantém o app destravado enquanto uma tela externa (ex: seletor de arquivos) está aberta. */
+    fun holdLock() { holdUntil = SystemClock.elapsedRealtime() + 180_000 }
+
+    fun autoLockCheck(awayMs: Long) {
+        val d = lockDelay
+        if (current == null || d < 0) return
+        if (SystemClock.elapsedRealtime() < holdUntil) return
+        if (awayMs >= d * 1000L) logout()
+    }
+
+    fun changeLockDelay(seconds: Int) {
+        lockDelay = seconds
+        prefs.lockDelay = seconds
+    }
+
+    fun changePassword(oldPass: String, newPass: String, newPass2: String, done: (String?) -> Unit) {
+        val p = current ?: return
+        if (newPass.length < 4) { done("A nova senha precisa ter pelo menos 4 caracteres."); return }
+        if (newPass != newPass2) { done("As senhas não conferem."); return }
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.Default) { Crypto.verify(oldPass, p.salt, p.hash) }
+            if (!ok) { done("Senha atual incorreta."); return@launch }
+            val salt = Crypto.randomBytes(16)
+            val hash = withContext(Dispatchers.Default) { Crypto.hashPassword(newPass, salt) }
+            dao.changePassword(p.id, Crypto.b64(salt), hash)
+            current = p.copy(salt = Crypto.b64(salt), hash = hash)
+            done(null)
+        }
+    }
+
+    fun updateProfile(name: String, avatar: String): String? {
+        val p = current ?: return null
+        val n = name.trim()
+        if (n.isEmpty()) return "Digite um nome."
+        if (n.length > 20) return "Nome muito longo (máx. 20 letras)."
+        if ((profiles.value ?: emptyList()).any { it.id != p.id && it.name.equals(n, ignoreCase = true) }) {
+            return "Já existe um perfil com esse nome."
+        }
+        viewModelScope.launch {
+            dao.updateProfile(p.id, n, avatar)
+            current = p.copy(name = n, avatar = avatar)
+        }
+        return null
+    }
+
+    fun deleteCurrentProfile(password: String, done: (String?) -> Unit) {
+        val p = current ?: return
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.Default) { Crypto.verify(password, p.salt, p.hash) }
+            if (!ok) { done("Senha incorreta."); return@launch }
+            dao.clear(p.id)
+            dao.deleteProfile(p.id)
+            if (prefs.bioProfile == p.id) { prefs.bioProfile = -1L; bioProfileId = -1L }
+            logout()
+            done(null)
+        }
+    }
+
+    // ================================================================ backup criptografado
+
+    private fun cardToJson(c: OwnedCard) = JSONObject().apply {
+        put("id", c.id); put("name", c.name); put("setId", c.setId); put("setName", c.setName)
+        put("setSymbol", c.setSymbol); put("number", c.number); put("printedTotal", c.printedTotal)
+        put("rarity", c.rarity ?: JSONObject.NULL); put("imageSmall", c.imageSmall)
+        put("imageLarge", c.imageLarge); put("price", c.price ?: JSONObject.NULL)
+        put("quantity", c.quantity); put("addedAt", c.addedAt)
+    }
+
+    private fun jsonToCard(pid: Long, o: JSONObject): OwnedCard? {
+        val id = o.optString("id")
+        val small = o.optString("imageSmall")
+        val large = o.optString("imageLarge")
+        if (id.isBlank() || id.length > 64 || !small.startsWith("https://") || !large.startsWith("https://")) return null
+        val sym = o.optString("setSymbol")
+        return OwnedCard(
+            profileId = pid, id = id,
+            name = o.optString("name").take(80), setId = o.optString("setId").take(40),
+            setName = o.optString("setName").take(80),
+            setSymbol = if (sym.startsWith("https://")) sym else "",
+            number = o.optString("number").take(12), printedTotal = o.optInt("printedTotal"),
+            rarity = if (o.isNull("rarity")) null else o.optString("rarity").take(40),
+            imageSmall = small, imageLarge = large,
+            price = if (o.isNull("price")) null else o.optDouble("price"),
+            quantity = o.optInt("quantity", 1).coerceIn(1, 9999),
+            addedAt = o.optLong("addedAt", System.currentTimeMillis())
+        )
+    }
+
+    private fun readLimited(ins: InputStream, max: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            val n = ins.read(buf)
+            if (n < 0) break
+            total += n
+            if (total > max) throw RuntimeException("Arquivo grande demais")
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
+
+    fun exportBackup(uri: Uri, password: String) {
+        val p = current ?: return
+        info = "Exportando…"
+        viewModelScope.launch {
+            try {
+                val n = withContext(Dispatchers.IO) {
+                    val list = dao.snapshot(p.id)
+                    val arr = JSONArray()
+                    list.forEach { arr.put(cardToJson(it)) }
+                    val root = JSONObject().put("v", 1).put("name", p.name).put("avatar", p.avatar).put("cards", arr)
+                    val enc = Crypto.encrypt(root.toString().toByteArray(), password)
+                    app.contentResolver.openOutputStream(uri)!!.use { it.write(enc) }
+                    list.size
+                }
+                info = "✓ Backup criptografado salvo ($n cartas). Guarde a senha do backup!"
+            } catch (e: Exception) {
+                info = "Falha ao exportar: ${e.message}"
+            }
+        }
+    }
+
+    fun importBackup(uri: Uri, password: String) {
+        val pid = current?.id ?: return
+        info = "Importando…"
+        viewModelScope.launch {
+            try {
+                val n = withContext(Dispatchers.IO) {
+                    val data = app.contentResolver.openInputStream(uri)!!.use { readLimited(it, 20_000_000) }
+                    val plain = try {
+                        Crypto.decrypt(data, password)
+                    } catch (e: Exception) {
+                        throw RuntimeException("Senha incorreta ou arquivo inválido")
+                    }
+                    val arr = JSONObject(String(plain)).getJSONArray("cards")
+                    if (arr.length() > 20_000) throw RuntimeException("Backup grande demais")
+                    val existing = dao.snapshot(pid).associateBy { it.id }
+                    val toSave = (0 until arr.length()).mapNotNull { i -> jsonToCard(pid, arr.getJSONObject(i)) }
+                        .map { c ->
+                            val ex = existing[c.id]
+                            if (ex == null) c else c.copy(quantity = max(ex.quantity, c.quantity), price = c.price ?: ex.price)
+                        }
+                    dao.upsertAll(toSave)
+                    toSave.size
+                }
+                info = "✓ $n cartas importadas para este perfil."
+            } catch (e: Exception) {
+                info = "Falha ao importar: ${e.message}"
+            }
+        }
+    }
+
+    // ================================================================ moeda e ajustes
+
     private fun loadRates(): Map<String, Double> {
         val js = prefs.ratesJson ?: return Currencies.fallback
         return try {
@@ -129,7 +411,8 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         prefs.autoScan = on
     }
 
-    // ---- fluxo de escaneamento ----
+    // ================================================================ escaneamento
+
     fun dismiss() { state = ScanState.Idle }
     fun clearAdded() { added = null }
     fun scanNow() { forceNext = true; message = null }
@@ -141,7 +424,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
 
     /** Chamado a cada quadro lido pela câmera. Confirma a carta quando o mesmo número aparece 2x seguidas. */
     fun onFrame(p: Parsed) {
-        if (state != ScanState.Idle) return
+        if (current == null || state != ScanState.Idle) return
         val now = SystemClock.elapsedRealtime()
         if (now < retryAt) return
         if (forceNext) {
@@ -234,16 +517,17 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun add(c: ApiCard) {
+        val pid = current?.id ?: return
         viewModelScope.launch {
-            val ex = dao.byId(c.id)
+            val ex = dao.byId(pid, c.id)
             val saved: OwnedCard
             if (ex != null) {
                 saved = ex.copy(quantity = ex.quantity + 1, price = c.price ?: ex.price)
             } else {
                 saved = OwnedCard(
-                    id = c.id, name = c.name, setId = c.setId, setName = c.setName, setSymbol = c.setSymbol,
-                    number = c.number, printedTotal = c.printedTotal, rarity = c.rarity,
-                    imageSmall = c.imageSmall, imageLarge = c.imageLarge, price = c.price
+                    profileId = pid, id = c.id, name = c.name, setId = c.setId, setName = c.setName,
+                    setSymbol = c.setSymbol, number = c.number, printedTotal = c.printedTotal,
+                    rarity = c.rarity, imageSmall = c.imageSmall, imageLarge = c.imageLarge, price = c.price
                 )
             }
             dao.upsert(saved)
@@ -256,15 +540,16 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
 
     fun setQty(c: OwnedCard, q: Int) {
         viewModelScope.launch {
-            if (q <= 0) dao.delete(c.id) else dao.upsert(c.copy(quantity = q))
+            if (q <= 0) dao.delete(c.profileId, c.id) else dao.upsert(c.copy(quantity = q))
         }
     }
 
     fun remove(c: OwnedCard) {
-        viewModelScope.launch { dao.delete(c.id) }
+        viewModelScope.launch { dao.delete(c.profileId, c.id) }
     }
 
-    // ---- atualização automática ----
+    // ================================================================ atualização automática
+
     fun checkUpdate(manual: Boolean) {
         if (checking) return
         checking = true
@@ -301,6 +586,11 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
             try {
                 val f = withContext(Dispatchers.IO) { Updater.download(app, info) { p -> updateProgress = p } }
                 updateProgress = null
+                if (!Updater.signatureOk(app, f)) {
+                    f.delete()
+                    updateStatus = "Atualização recusada: a assinatura não confere com a do app instalado."
+                    return@launch
+                }
                 update = null
                 Updater.install(app, f)
             } catch (e: Exception) {

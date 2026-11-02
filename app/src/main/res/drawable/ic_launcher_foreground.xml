@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:scaleX="0.82"
+        android:scaleY="0.82">
+        <!-- carta: borda amarela e miolo creme -->
+        <path
+            android:fillColor="#FFCB05"
+            android:pathData="M37,22 h34 a5,5 0 0 1 5,5 v54 a5,5 0 0 1 -5,5 h-34 a5,5 0 0 1 -5,-5 v-54 a5,5 0 0 1 5,-5 z" />
+        <path
+            android:fillColor="#FFF6D6"
+            android:pathData="M38,25 h32 a3,3 0 0 1 3,3 v52 a3,3 0 0 1 -3,3 h-32 a3,3 0 0 1 -3,-3 v-52 a3,3 0 0 1 3,-3 z" />
+        <!-- janela da arte -->
+        <path
+            android:fillColor="#3B4CCA"
+            android:pathData="M41,31 h26 a2,2 0 0 1 2,2 v22 a2,2 0 0 1 -2,2 h-26 a2,2 0 0 1 -2,-2 v-22 a2,2 0 0 1 2,-2 z" />
+        <!-- pokébola -->
+        <path
+            android:fillColor="#EE1515"
+            android:pathData="M45,44 a9,9 0 0 1 18,0 z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M45,44 a9,9 0 0 0 18,0 z" />
+        <path
+            android:fillColor="#1A1A1A"
+            android:pathData="M45,43 h18 v2 h-18 z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M54,41.2 a2.8,2.8 0 1 1 0,5.6 a2.8,2.8 0 1 1 0,-5.6 z"
+            android:strokeColor="#1A1A1A"
+            android:strokeWidth="1.4" />
+        <path
+            android:pathData="M54,35 a9,9 0 1 1 0,18 a9,9 0 1 1 0,-18 z"
+            android:strokeColor="#1A1A1A"
+            android:strokeWidth="1.2" />
+        <!-- linhas de texto da carta -->
+        <path
+            android:fillColor="#D6C27A"
+            android:pathData="M39,61 h20 v2.5 h-20 z" />
+        <path
+            android:fillColor="#E4D49B"
+            android:pathData="M39,66 h28 v2 h-28 z" />
+        <path
+            android:fillColor="#E4D49B"
+            android:pathData="M39,71 h24 v2 h-24 z" />
+        <!-- linha do scanner -->
+        <path
+            android:pathData="M24,58 H84"
+            android:strokeAlpha="0.28"
+            android:strokeColor="#4ADE80"
+            android:strokeWidth="7" />
+        <path
+            android:pathData="M24,58 H84"
+            android:strokeColor="#4ADE80"
+            android:strokeLineCap="round"
+            android:strokeWidth="2.2" />
+        <!-- cantos do scanner -->
+        <path
+            android:pathData="M26,26 V17 H35 M73,17 H82 V26 M26,82 V91 H35 M73,91 H82 V82"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:strokeWidth="3.4" />
+    </group>
+</vector>

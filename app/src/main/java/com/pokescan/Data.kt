@@ -10,6 +10,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -17,9 +19,22 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-@Entity(tableName = "owned_cards")
+/** Perfil de usuário (local). A senha nunca é guardada: só o hash PBKDF2 + salt. */
+@Entity(tableName = "profiles")
+data class Profile(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val salt: String,
+    val hash: String,
+    val avatar: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+/** Carta de um perfil. profileId = 0 só existe para cartas de versões antigas, que são adotadas pelo primeiro perfil criado. */
+@Entity(tableName = "owned_cards", primaryKeys = ["profileId", "id"])
 data class OwnedCard(
-    @PrimaryKey val id: String,
+    val profileId: Long = 0,
+    val id: String,
     val name: String,
     val setId: String,
     val setName: String,
@@ -36,20 +51,76 @@ data class OwnedCard(
 
 @Dao
 interface CardDao {
-    @Query("SELECT * FROM owned_cards ORDER BY addedAt DESC")
-    fun all(): Flow<List<OwnedCard>>
+    @Query("SELECT * FROM owned_cards WHERE profileId = :pid ORDER BY addedAt DESC")
+    fun all(pid: Long): Flow<List<OwnedCard>>
 
-    @Query("SELECT * FROM owned_cards WHERE id = :id")
-    suspend fun byId(id: String): OwnedCard?
+    @Query("SELECT * FROM owned_cards WHERE profileId = :pid AND id = :id")
+    suspend fun byId(pid: Long, id: String): OwnedCard?
+
+    @Query("SELECT * FROM owned_cards WHERE profileId = :pid")
+    suspend fun snapshot(pid: Long): List<OwnedCard>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(card: OwnedCard)
 
-    @Query("DELETE FROM owned_cards WHERE id = :id")
-    suspend fun delete(id: String)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(cards: List<OwnedCard>)
+
+    @Query("DELETE FROM owned_cards WHERE profileId = :pid AND id = :id")
+    suspend fun delete(pid: Long, id: String)
+
+    @Query("DELETE FROM owned_cards WHERE profileId = :pid")
+    suspend fun clear(pid: Long)
+
+    @Query("UPDATE owned_cards SET profileId = :pid WHERE profileId = 0")
+    suspend fun adoptLegacy(pid: Long)
+
+    @Query("SELECT * FROM profiles ORDER BY id")
+    fun profiles(): Flow<List<Profile>>
+
+    @Query("SELECT * FROM profiles WHERE id = :id")
+    suspend fun profile(id: Long): Profile?
+
+    @Insert
+    suspend fun insertProfile(p: Profile): Long
+
+    @Query("DELETE FROM profiles WHERE id = :id")
+    suspend fun deleteProfile(id: Long)
+
+    @Query("UPDATE profiles SET salt = :salt, hash = :hash WHERE id = :id")
+    suspend fun changePassword(id: Long, salt: String, hash: String)
+
+    @Query("UPDATE profiles SET name = :name, avatar = :avatar WHERE id = :id")
+    suspend fun updateProfile(id: Long, name: String, avatar: String)
 }
 
-@Database(entities = [OwnedCard::class], version = 1, exportSchema = false)
+/** v1 -> v2: cria perfis e separa as cartas por perfil, preservando as cartas já escaneadas. */
+val MIGRATION_1_2 = object : Migration(1, 2) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `profiles` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`name` TEXT NOT NULL, `salt` TEXT NOT NULL, `hash` TEXT NOT NULL, " +
+                "`avatar` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `owned_cards_new` (`profileId` INTEGER NOT NULL, `id` TEXT NOT NULL, " +
+                "`name` TEXT NOT NULL, `setId` TEXT NOT NULL, `setName` TEXT NOT NULL, `setSymbol` TEXT NOT NULL, " +
+                "`number` TEXT NOT NULL, `printedTotal` INTEGER NOT NULL, `rarity` TEXT, " +
+                "`imageSmall` TEXT NOT NULL, `imageLarge` TEXT NOT NULL, `price` REAL, " +
+                "`quantity` INTEGER NOT NULL, `addedAt` INTEGER NOT NULL, PRIMARY KEY(`profileId`, `id`))"
+        )
+        db.execSQL(
+            "INSERT INTO owned_cards_new (profileId, id, name, setId, setName, setSymbol, number, printedTotal, " +
+                "rarity, imageSmall, imageLarge, price, quantity, addedAt) " +
+                "SELECT 0, id, name, setId, setName, setSymbol, number, printedTotal, rarity, imageSmall, " +
+                "imageLarge, price, quantity, addedAt FROM owned_cards"
+        )
+        db.execSQL("DROP TABLE owned_cards")
+        db.execSQL("ALTER TABLE owned_cards_new RENAME TO owned_cards")
+    }
+}
+
+@Database(entities = [Profile::class, OwnedCard::class], version = 2, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): CardDao
 
@@ -59,6 +130,7 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(ctx: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "pokescan.db")
+                .addMigrations(MIGRATION_1_2)
                 .build().also { inst = it }
         }
     }

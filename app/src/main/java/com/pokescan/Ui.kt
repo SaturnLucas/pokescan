@@ -486,7 +486,7 @@ fun DexScreen(vm: MainVM) {
     val total = cards.sumOf { (it.price ?: 0.0) * it.quantity }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        Text("Minha Pokédex", fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 10.dp))
+        Text("${vm.current?.avatar ?: ""} Pokédex de ${vm.current?.name ?: ""}", fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard("Únicas", "${cards.size}", Modifier.weight(1f))
             StatCard("Total", "${cards.sumOf { it.quantity }}", Modifier.weight(1f))
@@ -633,74 +633,3 @@ fun SetsScreen(vm: MainVM) {
 }
 
 data class SetProgress(val name: String, val symbol: String, val owned: Int, val total: Int)
-
-// ---------------------------------------------------------------- ajustes
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun SettingsScreen(vm: MainVM) {
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text("Ajustes", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-
-        SectionCard("💱 Moeda") {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Currencies.list.forEach { (code, label) ->
-                    val sel = vm.currency == code
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = if (sel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.clip(RoundedCornerShape(50)).clickable { vm.changeCurrency(code) }
-                    ) {
-                        Text(
-                            label,
-                            Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                            color = if (sel) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                            fontSize = 13.sp,
-                            fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                }
-            }
-            val quando = if (vm.ratesTime > 0)
-                SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()).format(Date(vm.ratesTime)) else "valores aproximados"
-            Text(
-                "Preços do TCGplayer (mercado dos EUA, em dólar) convertidos pela cotação do dia. É uma estimativa. Cotação: $quando.",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        SectionCard("⚡ Escaneamento") {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Escaneamento automático", fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "Lê a carta sozinho quando o número aparece. Desligado, você toca em “Escanear carta”.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(checked = vm.autoScan, onCheckedChange = { vm.changeAutoScan(it) })
-            }
-        }
-
-        SectionCard("⬆️ Atualização") {
-            Text("Versão ${vm.versionName} (build ${vm.versionCode})")
-            vm.updateStatus?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = !vm.checking, onClick = { vm.checkUpdate(true) }) { Text("Verificar agora") }
-                if (vm.update != null) {
-                    Button(onClick = { vm.installUpdate() }) { Text("Instalar ${vm.update?.versionName}") }
-                }
-            }
-            Text(
-                "O app também verifica sozinho toda vez que você abre.",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
