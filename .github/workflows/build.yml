@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,9 +20,30 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
-      - uses: actions/upload-artifact@v4
-        with:
-          name: PokeScan-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Restaurar chave de assinatura
+        env:
+          KS: ${{ secrets.KEYSTORE_B64 }}
+        run: echo "$KS" | base64 -d > "$RUNNER_TEMP/release.jks"
+      - name: Compilar APK assinado
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: pokescan
+          KEY_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          set -o pipefail
+          gradle assembleRelease -PversionCode=${{ github.run_number }} --no-daemon --stacktrace 2>&1 | tee build.log
+      - name: Publicar release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ github.event.head_commit.message }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk PokeScan.apk
+          gh release create "v${{ github.run_number }}" PokeScan.apk --repo ${{ github.repository }} --title "PokéScan v${{ github.run_number }}" --notes "${NOTES:-Atualização}"
+      - name: Relatar erro de build
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { echo '```'; grep -E "^e: |error:|What went wrong|FAILURE" -A4 build.log | head -c 5500; echo '```'; } > err.md
+          gh api repos/${{ github.repository }}/commits/${{ github.sha }}/comments -F body=@err.md

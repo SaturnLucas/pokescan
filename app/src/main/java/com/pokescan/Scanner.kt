@@ -1,15 +1,23 @@
 package com.pokescan
 
-import android.content.Context
+import android.os.SystemClock
+import android.util.Size
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -18,6 +26,7 @@ import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognizer
+import java.util.concurrent.Executors
 
 data class Parsed(val number: String?, val total: Int?, val names: List<String>, val raw: String)
 
@@ -48,45 +57,65 @@ object OcrParser {
             .trim()
 }
 
-fun captureAndRecognize(ctx: Context, ic: ImageCapture, rec: TextRecognizer, vm: MainVM) {
-    vm.begin()
-    ic.takePicture(ContextCompat.getMainExecutor(ctx), object : ImageCapture.OnImageCapturedCallback() {
-        override fun onCaptureSuccess(image: ImageProxy) {
-            val media = image.image
-            if (media == null) {
-                image.close()
-                vm.fail("Falha ao ler a imagem da câmera.")
-                return
-            }
-            val input = InputImage.fromMediaImage(media, image.imageInfo.rotationDegrees)
-            rec.process(input)
-                .addOnSuccessListener { vm.onOcr(OcrParser.parse(it)) }
-                .addOnFailureListener { vm.fail("OCR falhou: ${it.message}") }
-                .addOnCompleteListener { image.close() }
-        }
+/** Lê os quadros da câmera continuamente (2 por segundo) e manda o texto para o ViewModel. */
+class FrameAnalyzer(
+    private val rec: TextRecognizer,
+    private val enabled: () -> Boolean,
+    private val onResult: (Parsed) -> Unit
+) : ImageAnalysis.Analyzer {
+    private var last = 0L
 
-        override fun onError(exception: ImageCaptureException) {
-            vm.fail("Erro na câmera: ${exception.message}")
+    override fun analyze(image: ImageProxy) {
+        val now = SystemClock.elapsedRealtime()
+        val media = image.image
+        if (media == null || !enabled() || now - last < 500) {
+            image.close()
+            return
         }
-    })
+        last = now
+        val input = InputImage.fromMediaImage(media, image.imageInfo.rotationDegrees)
+        rec.process(input)
+            .addOnSuccessListener { onResult(OcrParser.parse(it)) }
+            .addOnCompleteListener { image.close() }
+    }
 }
 
 @Composable
-fun CameraPreview(imageCapture: ImageCapture, modifier: Modifier = Modifier) {
+fun CameraPreview(analyzer: ImageAnalysis.Analyzer, torch: Boolean, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val owner = LocalLifecycleOwner.current
+    val executor = remember { Executors.newSingleThreadExecutor() }
+    var camera by remember { mutableStateOf<Camera?>(null) }
+
     AndroidView(modifier = modifier, factory = { c ->
         val pv = PreviewView(c)
+        pv.scaleType = PreviewView.ScaleType.FILL_CENTER
         val future = ProcessCameraProvider.getInstance(c)
         future.addListener({
             val provider = future.get()
             val preview = Preview.Builder().build().also { it.setSurfaceProvider(pv.surfaceProvider) }
+            val analysis = ImageAnalysis.Builder()
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .setResolutionStrategy(
+                            ResolutionStrategy(Size(1920, 1080), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+                        ).build()
+                )
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also { it.setAnalyzer(executor, analyzer) }
             provider.unbindAll()
-            provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture)
+            camera = provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
         }, ContextCompat.getMainExecutor(c))
         pv
     })
+
+    LaunchedEffect(camera, torch) { camera?.cameraControl?.enableTorch(torch) }
+
     DisposableEffect(Unit) {
-        onDispose { runCatching { ProcessCameraProvider.getInstance(ctx).get().unbindAll() } }
+        onDispose {
+            runCatching { ProcessCameraProvider.getInstance(ctx).get().unbindAll() }
+            executor.shutdown()
+        }
     }
 }
