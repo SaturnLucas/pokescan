@@ -48,6 +48,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     private var candCount = 0
     private var lockedKey: String? = null
     private var lastSeen = 0L
+    private var retryAt = 0L
 
     val wantsFrames: Boolean
         get() = state == ScanState.Idle && (autoScan || forceNext)
@@ -142,6 +143,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     fun onFrame(p: Parsed) {
         if (state != ScanState.Idle) return
         val now = SystemClock.elapsedRealtime()
+        if (now < retryAt) return
         if (forceNext) {
             forceNext = false
             onOcr(p)
@@ -184,9 +186,22 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
                     }
                 }
             } catch (e: Exception) {
-                fail("Erro ao consultar a API: ${e.message}")
+                apiFailed(e)
             }
         }
+    }
+
+    private fun apiFailed(e: Exception) {
+        retryAt = SystemClock.elapsedRealtime() + 5000
+        lockedKey = null
+        candKey = null
+        candCount = 0
+        val code = e.message ?: ""
+        fail(
+            if (code.startsWith("HTTP 5") || e is java.io.IOException)
+                "A API de cartas está instável agora ($code). Tentando de novo em instantes…"
+            else "Erro ao consultar a API: $code"
+        )
     }
 
     private fun find(p: Parsed): List<ApiCard> {
@@ -213,7 +228,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
                 val r = withContext(Dispatchers.IO) { PokeApi.search(nameQuery(q)) }
                 if (r.isEmpty()) fail("Nada encontrado para \"$q\".") else state = ScanState.Choose(r)
             } catch (e: Exception) {
-                fail("Erro ao consultar a API: ${e.message}")
+                apiFailed(e)
             }
         }
     }

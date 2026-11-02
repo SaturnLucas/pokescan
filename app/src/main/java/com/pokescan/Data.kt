@@ -82,25 +82,37 @@ data class ApiCard(
 object PokeApi {
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(40, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
         .build()
 
+    private class ClientError(msg: String) : RuntimeException(msg)
+
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, List<ApiCard>>()
+
+    /** Consulta com até 4 tentativas (espera 1s, 2s, 4s) para erros 5xx/timeouts; resultados ficam em cache. */
     fun search(q: String): List<ApiCard> {
+        cache[q]?.let { return it }
         val url = "https://api.pokemontcg.io/v2/cards".toHttpUrl().newBuilder()
             .addQueryParameter("q", q)
             .addQueryParameter("pageSize", "20")
             .addQueryParameter("select", "id,name,number,rarity,set,images,tcgplayer")
             .build()
         var last: Exception? = null
-        repeat(2) {
+        for (attempt in 0 until 4) {
             try {
                 client.newCall(Request.Builder().url(url).build()).execute().use { r ->
-                    if (!r.isSuccessful) throw RuntimeException("HTTP ${r.code}")
+                    if (r.code in 500..599) throw RuntimeException("HTTP ${r.code}")
+                    if (!r.isSuccessful) throw ClientError("HTTP ${r.code}")
                     val arr = JSONObject(r.body!!.string()).getJSONArray("data")
-                    return (0 until arr.length()).map { parse(arr.getJSONObject(it)) }
+                    val list = (0 until arr.length()).map { parse(arr.getJSONObject(it)) }
+                    if (list.isNotEmpty()) cache[q] = list
+                    return list
                 }
+            } catch (e: ClientError) {
+                throw e
             } catch (e: Exception) {
                 last = e
+                if (attempt < 3) Thread.sleep(1000L shl attempt)
             }
         }
         throw last ?: RuntimeException("Erro desconhecido")
