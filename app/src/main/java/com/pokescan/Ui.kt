@@ -388,7 +388,7 @@ fun AddedCard(a: Added, vm: MainVM) {
             Column(Modifier.weight(1f)) {
                 Text(c.name, fontWeight = FontWeight.Bold, fontSize = 17.sp, maxLines = 1)
                 Text(
-                    "${c.setName} · ${c.number}/${c.printedTotal}",
+                    "${c.setName} · ${numLabel(c.number, c.printedTotal)}",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
@@ -422,7 +422,7 @@ fun ChooseDialog(cards: List<ApiCard>, vm: MainVM, onPick: (ApiCard) -> Unit, on
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text(c.name, fontWeight = FontWeight.Bold)
-                            Text("${c.setName} · ${c.number}/${c.printedTotal}", fontSize = 13.sp)
+                            Text("${c.setName} · ${numLabel(c.number, c.printedTotal)}", fontSize = 13.sp)
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 c.rarity?.let { Tag(it, rarityColor(it)) }
                                 Spacer(Modifier.width(8.dp))
@@ -528,7 +528,7 @@ fun DetailDialog(c: OwnedCard, vm: MainVM, onClose: () -> Unit) {
                     contentDescription = c.name,
                     modifier = Modifier.fillMaxWidth().aspectRatio(CARD_RATIO)
                 )
-                Text("${c.setName} · ${c.number}/${c.printedTotal}")
+                Text("${c.setName} · ${numLabel(c.number, c.printedTotal)}")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     c.rarity?.let { Tag(it, rarityColor(it)) }
                     Text(vm.money(vm.unitValueUsd(c)), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)

@@ -8,7 +8,15 @@ import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
-data class CatalogHit(val id: String, val name: String, val number: String, val image: String?, val lang: String)
+/** Resultado de busca no catálogo. [card] vem preenchido quando a fonte já devolve a carta completa (Poke API Brasil). */
+data class CatalogHit(
+    val id: String,
+    val name: String,
+    val number: String,
+    val thumb: String?,
+    val lang: String,
+    val card: ApiCard? = null
+)
 data class CatalogResult(val hits: List<CatalogHit>, val note: String?)
 
 private fun JSONObject.str(k: String): String = if (isNull(k)) "" else optString(k)
@@ -75,7 +83,7 @@ object TcgDex {
         val arr = JSONArray(body)
         return (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
-            CatalogHit(o.str("id"), o.str("name"), o.str("localId"), o.str("image").ifBlank { null }, lang)
+            CatalogHit(o.str("id"), o.str("name"), o.str("localId"), o.str("image").ifBlank { null }?.let { "$it/low.webp" }, lang)
         }.reversed().take(60)
     }
 
@@ -148,7 +156,9 @@ object TcgDex {
         for (s in candidates) {
             val ids = listOf(number, number.padStart(3, '0')).distinct()
             for (lid in ids) {
-                val d = detail("pt", "${s.id}-$lid", eurPerUsd) ?: detail("en", "${s.id}-$lid", eurPerUsd)
+                val d = detail("pt-br", "${s.id}-$lid", eurPerUsd)
+                    ?: detail("pt", "${s.id}-$lid", eurPerUsd)
+                    ?: detail("en", "${s.id}-$lid", eurPerUsd)
                 if (d != null) {
                     out += d
                     break
@@ -156,5 +166,88 @@ object TcgDex {
             }
         }
         return out
+    }
+}
+
+
+/**
+ * Poke API Brasil (https://pokeapi.com.br): sem chave. GET /api/cards/search?q=...&limit=...
+ * Resposta: { success, count, data: [ { id, name, set_name, rarity, image_url (relativa), raw_data } ] }.
+ * Boa para achar cartas por nome em português; as imagens vêm do próprio serviço.
+ */
+object PokeApiBr {
+    private const val HOST = "https://pokeapi.com.br"
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .build()
+    private val cache = ConcurrentHashMap<String, List<ApiCard>>()
+
+    fun searchCards(q: String, limit: Int = 30): List<ApiCard> {
+        val key = "$q|$limit"
+        cache[key]?.let { return it }
+        val url = "$HOST/api/cards/search".toHttpUrl().newBuilder()
+            .addQueryParameter("q", q)
+            .addQueryParameter("limit", "$limit")
+            .build()
+        var last: Exception? = null
+        for (attempt in 0 until 2) {
+            try {
+                client.newCall(Request.Builder().url(url).header("Accept", "application/json").build()).execute().use { r ->
+                    if (r.code == 404) return emptyList()
+                    if (!r.isSuccessful) throw RuntimeException("HTTP ${r.code}")
+                    val root = JSONObject(r.body!!.string())
+                    if (root.has("success") && !root.optBoolean("success", true)) return emptyList()
+                    val arr = root.optJSONArray("data") ?: return emptyList()
+                    val list = (0 until arr.length()).mapNotNull { i -> toCard(arr.getJSONObject(i)) }
+                    if (list.isNotEmpty()) cache[key] = list
+                    return list
+                }
+            } catch (e: Exception) {
+                last = e
+                if (attempt < 1) Thread.sleep(800)
+            }
+        }
+        throw last ?: RuntimeException("Erro desconhecido")
+    }
+
+    fun search(q: String): List<CatalogHit> =
+        searchCards(q).map { CatalogHit(it.id, it.name, it.number, it.imageSmall.ifBlank { null }, "pokeapibr", it) }
+
+    private fun abs(u: String): String = if (u.startsWith("https://")) u else if (u.startsWith("/")) HOST + u else ""
+
+    private fun toCard(o: JSONObject): ApiCard? {
+        val id = o.str("id")
+        if (id.isBlank()) return null
+        val raw = o.optJSONObject("raw_data")
+        val set = raw?.optJSONObject("set")
+        val number = raw?.str("number").orEmpty().ifBlank { raw?.str("localId").orEmpty() }
+            .ifBlank { id.substringAfterLast('-', "") }
+        val cc = set?.optJSONObject("cardCount")
+        val total = set?.optInt("printedTotal", 0)?.takeIf { it > 0 } ?: cc?.optInt("official", 0) ?: 0
+        val low = o.str("image_url")
+        val high = low.replace("size=low", "size=high")
+        var price: Double? = null
+        val prices = raw?.optJSONObject("tcgplayer")?.optJSONObject("prices")
+        if (prices != null) {
+            val keys = prices.keys()
+            while (keys.hasNext()) {
+                val m = prices.optJSONObject(keys.next())?.optDouble("market", Double.NaN) ?: Double.NaN
+                if (!m.isNaN() && m > 0) { price = m; break }
+            }
+        }
+        return ApiCard(
+            id = id,
+            name = o.str("name"),
+            number = number,
+            setId = set?.str("id").orEmpty().ifBlank { id.substringBeforeLast('-', "") },
+            setName = o.str("set_name").ifBlank { set?.str("name").orEmpty() },
+            setSymbol = "",
+            printedTotal = total,
+            rarity = o.str("rarity").ifBlank { null },
+            imageSmall = abs(low),
+            imageLarge = abs(high).ifBlank { abs(low) },
+            price = price
+        )
     }
 }

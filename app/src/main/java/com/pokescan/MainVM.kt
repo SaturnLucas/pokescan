@@ -540,6 +540,12 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
             }
             if (alt.isNotEmpty()) return alt
         }
+        // Poke API Brasil: acha pelo nome (inclusive em português) e filtra pelo número lido, se houver.
+        for (n in p.names.take(2)) {
+            val r = try { PokeApiBr.searchCards(n, 20) } catch (e: Exception) { emptyList() }
+            val f = if (p.number != null) r.filter { it.number.trimStart('0') == p.number } else r
+            if (f.isNotEmpty()) return f
+        }
         if (failure != null) throw failure
         return emptyList()
     }
@@ -609,14 +615,37 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     /** Cotação de 1 unidade da moeda [code] na moeda escolhida (ex: "US$ 1 = R$ 5,52"). */
     fun quote(code: String): String = money(1.0 / (rates[code] ?: 1.0))
 
+    /** Cadeia de fontes: TCGdex pt-br -> TCGdex pt -> Poke API Brasil -> TCGdex en. */
     suspend fun catalogSearch(q: String): CatalogResult = withContext(Dispatchers.IO) {
-        val pt = TcgDex.search("pt", q)
-        if (pt.isNotEmpty()) CatalogResult(pt, null)
-        else CatalogResult(TcgDex.search("en", q), "Sem resultado em PT-BR: mostrando o catálogo em inglês.")
+        var firstError: Exception? = null
+        for (lang in listOf("pt-br", "pt")) {
+            try {
+                val r = TcgDex.search(lang, q)
+                if (r.isNotEmpty()) return@withContext CatalogResult(r, null)
+            } catch (e: Exception) {
+                if (firstError == null) firstError = e
+            }
+        }
+        try {
+            val r = PokeApiBr.search(q)
+            if (r.isNotEmpty()) return@withContext CatalogResult(r, "Resultados da Poke API Brasil.")
+        } catch (e: Exception) {
+            if (firstError == null) firstError = e
+        }
+        try {
+            val r = TcgDex.search("en", q)
+            if (r.isNotEmpty()) return@withContext CatalogResult(r, "Sem resultado em PT-BR: mostrando o catálogo em inglês.")
+        } catch (e: Exception) {
+            if (firstError == null) firstError = e
+        }
+        if (firstError != null) throw firstError
+        CatalogResult(emptyList(), null)
     }
 
     suspend fun catalogDetail(h: CatalogHit): ApiCard? = withContext(Dispatchers.IO) {
+        h.card?.let { return@withContext it }
         var d = TcgDex.detail(h.lang, h.id, eurPerUsd())
+        if (d == null && h.lang == "pt-br") d = TcgDex.detail("pt", h.id, eurPerUsd())
         if (d != null && d.price == null && h.lang != "en") {
             val e = TcgDex.detail("en", h.id, eurPerUsd())
             if (e?.price != null) d = d.copy(price = e.price)

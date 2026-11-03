@@ -196,6 +196,15 @@ fun SettingsScreen(vm: MainVM) {
             }
         }
 
+        SectionCard("🌐 Fontes de dados") {
+            Text(
+                "• Scan: pokemontcg.io (principal) → TCGdex (reserva) → Poke API Brasil (por nome)\n" +
+                    "• Buscar e Mercado: TCGdex em português do Brasil → TCGdex pt → Poke API Brasil → TCGdex em inglês\n" +
+                    "• Preços: TCGplayer (USD) e Cardmarket (EUR), convertidos para a sua moeda",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
         SectionCard("⬆️ Atualização") {
             Text("Versão ${vm.versionName} (build ${vm.versionCode})")
             vm.updateStatus?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }

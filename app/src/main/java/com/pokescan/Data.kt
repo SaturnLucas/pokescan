@@ -159,6 +159,9 @@ abstract class AppDb : RoomDatabase() {
     }
 }
 
+/** "25/165" quando o total do set é conhecido; só "25" caso contrário. */
+fun numLabel(number: String, total: Int): String = if (total > 0) "$number/$total" else number
+
 data class ApiCard(
     val id: String,
     val name: String,

@@ -565,7 +565,7 @@ fun CatalogPanel(vm: MainVM, modifier: Modifier = Modifier) {
             items(hits, key = { it.lang + it.id }) { h ->
                 Column(Modifier.clip(RoundedCornerShape(8.dp)).clickable { open(h) }) {
                     AsyncImage(
-                        model = h.image?.let { "$it/low.webp" },
+                        model = h.thumb,
                         contentDescription = h.name,
                         modifier = Modifier.fillMaxWidth().aspectRatio(CARD_RATIO).clip(RoundedCornerShape(8.dp))
                             .background(Color(0xFF1C1912))
@@ -598,7 +598,7 @@ fun CatalogDialog(vm: MainVM, c: ApiCard, onClose: () -> Unit) {
                     model = c.imageLarge, contentDescription = c.name,
                     modifier = Modifier.fillMaxWidth().aspectRatio(CARD_RATIO)
                 )
-                Text("${c.setName} · ${c.number}/${c.printedTotal}", fontSize = 13.sp)
+                Text("${c.setName} · ${numLabel(c.number, c.printedTotal)}", fontSize = 13.sp)
                 c.rarity?.let { Tag(it, rarityColor(it)) }
                 Surface(shape = RoundedCornerShape(14.dp), color = PanelBg, border = BorderStroke(1.dp, GoldLine)) {
                     Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
