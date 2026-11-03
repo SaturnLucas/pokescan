@@ -66,7 +66,10 @@ fun SettingsScreen(vm: MainVM) {
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text("Ajustes", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Column {
+            Kicker("PERFIL")
+            Text("Seus dados e ajustes", fontSize = 27.sp, fontWeight = FontWeight.ExtraBold)
+        }
 
         if (me != null) {
             SectionCard("👤 Perfil") {

@@ -18,7 +18,7 @@
             android:pathData="M38,25 h32 a3,3 0 0 1 3,3 v52 a3,3 0 0 1 -3,3 h-32 a3,3 0 0 1 -3,-3 v-52 a3,3 0 0 1 3,-3 z" />
         <!-- janela da arte -->
         <path
-            android:fillColor="#3B4CCA"
+            android:fillColor="#2A2415"
             android:pathData="M41,31 h26 a2,2 0 0 1 2,2 v22 a2,2 0 0 1 -2,2 h-26 a2,2 0 0 1 -2,-2 v-22 a2,2 0 0 1 2,-2 z" />
         <!-- pokébola -->
         <path
@@ -63,7 +63,7 @@
         <!-- cantos do scanner -->
         <path
             android:pathData="M26,26 V17 H35 M73,17 H82 V26 M26,82 V91 H35 M73,91 H82 V82"
-            android:strokeColor="#FFFFFF"
+            android:strokeColor="#E0B04A"
             android:strokeLineCap="round"
             android:strokeLineJoin="round"
             android:strokeWidth="3.4" />

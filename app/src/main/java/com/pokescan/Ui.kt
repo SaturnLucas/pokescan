@@ -95,48 +95,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private const val CARD_RATIO = 0.716f
+const val CARD_RATIO = 0.716f
 
 // ---------------------------------------------------------------- app
-
-@Composable
-fun App(vm: MainVM) {
-    var tab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("📷" to "Escanear", "📖" to "Pokédex", "🗂️" to "Sets", "⚙️" to "Ajustes")
-
-    LaunchedEffect(Unit) { vm.checkUpdate(false) }
-
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                tabs.forEachIndexed { i, (emoji, label) ->
-                    NavigationBarItem(
-                        selected = tab == i,
-                        onClick = { tab = i },
-                        icon = { Text(emoji, fontSize = 20.sp) },
-                        label = { Text(label, fontSize = 11.sp) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            indicatorColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    )
-                }
-            }
-        }
-    ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize()) {
-            when (tab) {
-                0 -> ScanScreen(vm)
-                1 -> DexScreen(vm)
-                2 -> SetsScreen(vm)
-                else -> SettingsScreen(vm)
-            }
-        }
-    }
-    UpdateDialog(vm)
-}
 
 @Composable
 fun UpdateDialog(vm: MainVM) {
@@ -302,7 +263,7 @@ fun ScanScreen(vm: MainVM) {
             val top = (size.height - fh) / 2f - size.height * 0.05f
             val r = 18.dp.toPx()
 
-            drawRect(Color(0xB30F1220))
+            drawRect(Color(0xB3000000))
             drawRoundRect(
                 Color.Black, Offset(left, top), Size(fw, fh), CornerRadius(r, r), blendMode = BlendMode.Clear
             )
@@ -353,7 +314,7 @@ fun ScanScreen(vm: MainVM) {
         Column(
             Modifier.align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE60F1220))))
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000))))
                 .padding(start = 16.dp, end = 16.dp, top = 36.dp, bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -486,7 +447,6 @@ fun DexScreen(vm: MainVM) {
     val total = cards.sumOf { (it.price ?: 0.0) * it.quantity }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        Text("${vm.current?.avatar ?: ""} Pokédex de ${vm.current?.name ?: ""}", fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatCard("Únicas", "${cards.size}", Modifier.weight(1f))
             StatCard("Total", "${cards.sumOf { it.quantity }}", Modifier.weight(1f))
@@ -531,7 +491,7 @@ fun DexScreen(vm: MainVM) {
                                 .padding(top = 14.dp, bottom = 3.dp)
                         ) {
                             Text(
-                                vm.money(c.price),
+                                vm.money(vm.unitValueUsd(c)),
                                 Modifier.align(Alignment.Center),
                                 color = Color.White,
                                 fontSize = 11.sp,
@@ -571,7 +531,11 @@ fun DetailDialog(c: OwnedCard, vm: MainVM, onClose: () -> Unit) {
                 Text("${c.setName} · ${c.number}/${c.printedTotal}")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     c.rarity?.let { Tag(it, rarityColor(it)) }
-                    Text(vm.money(c.price), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    Text(vm.money(vm.unitValueUsd(c)), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                }
+                Text("Condição: ${Cond.label(c.condition)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Cond.all.forEach { code -> Pill(code, c.condition == code, compact = true) { vm.setCondition(c, code) } }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedButton(onClick = { vm.setQty(c, c.quantity - 1) }) { Text("−") }
@@ -593,7 +557,6 @@ fun SetsScreen(vm: MainVM) {
         .sortedByDescending { it.owned.toFloat() / it.total.coerceAtLeast(1) }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        Text("Progresso por set", fontSize = 26.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(vertical = 10.dp))
         if (groups.isEmpty()) {
             Text("Escaneie cartas para ver o progresso de cada coleção.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

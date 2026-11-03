@@ -285,7 +285,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         put("setSymbol", c.setSymbol); put("number", c.number); put("printedTotal", c.printedTotal)
         put("rarity", c.rarity ?: JSONObject.NULL); put("imageSmall", c.imageSmall)
         put("imageLarge", c.imageLarge); put("price", c.price ?: JSONObject.NULL)
-        put("quantity", c.quantity); put("addedAt", c.addedAt)
+        put("quantity", c.quantity); put("condition", c.condition); put("addedAt", c.addedAt)
     }
 
     private fun jsonToCard(pid: Long, o: JSONObject): OwnedCard? {
@@ -304,6 +304,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
             imageSmall = small, imageLarge = large,
             price = if (o.isNull("price")) null else o.optDouble("price"),
             quantity = o.optInt("quantity", 1).coerceIn(1, 9999),
+            condition = o.optString("condition", "NM").let { if (it in Cond.all) it else "NM" },
             addedAt = o.optLong("addedAt", System.currentTimeMillis())
         )
     }
@@ -487,15 +488,32 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         )
     }
 
+    private fun eurPerUsd(): Double = rates["EUR"] ?: 0.92
+
     private fun find(p: Parsed): List<ApiCard> {
+        var failure: Exception? = null
+        try {
+            if (p.number != null && p.total != null) {
+                val r = PokeApi.search("number:${p.number} set.printedTotal:${p.total}")
+                if (r.isNotEmpty()) return r
+            }
+            for (n in p.names) {
+                val r = PokeApi.search(nameQuery(n) + (p.number?.let { " number:$it" } ?: ""))
+                if (r.isNotEmpty()) return r
+            }
+        } catch (e: Exception) {
+            failure = e
+        }
+        // Base reserva (TCGdex, com nomes em português): API principal fora do ar ou sem a carta.
         if (p.number != null && p.total != null) {
-            val r = PokeApi.search("number:${p.number} set.printedTotal:${p.total}")
-            if (r.isNotEmpty()) return r
+            val alt = try {
+                TcgDex.findByNumber(p.number, p.total, eurPerUsd())
+            } catch (e: Exception) {
+                emptyList()
+            }
+            if (alt.isNotEmpty()) return alt
         }
-        for (n in p.names) {
-            val r = PokeApi.search(nameQuery(n) + (p.number?.let { " number:$it" } ?: ""))
-            if (r.isNotEmpty()) return r
-        }
+        if (failure != null) throw failure
         return emptyList()
     }
 
@@ -546,6 +564,55 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
 
     fun remove(c: OwnedCard) {
         viewModelScope.launch { dao.delete(c.profileId, c.id) }
+    }
+
+
+    // ================================================================ valor, condição e catálogo
+
+    /** Valor de UMA unidade da carta (em dólar), já ajustado pela condição. */
+    fun unitValueUsd(c: OwnedCard): Double? = c.price?.let { it * Cond.factor(c.condition) }
+
+    /** Valor total da carta (em dólar): unidade x condição x quantidade. */
+    fun valueUsd(c: OwnedCard): Double = (unitValueUsd(c) ?: 0.0) * c.quantity
+
+    fun setCondition(c: OwnedCard, code: String) {
+        viewModelScope.launch { dao.upsert(c.copy(condition = code)) }
+    }
+
+    /** Cotação de 1 unidade da moeda [code] na moeda escolhida (ex: "US$ 1 = R$ 5,52"). */
+    fun quote(code: String): String = money(1.0 / (rates[code] ?: 1.0))
+
+    suspend fun catalogSearch(q: String): CatalogResult = withContext(Dispatchers.IO) {
+        val pt = TcgDex.search("pt", q)
+        if (pt.isNotEmpty()) CatalogResult(pt, null)
+        else CatalogResult(TcgDex.search("en", q), "Sem resultado em PT-BR: mostrando o catálogo em inglês.")
+    }
+
+    suspend fun catalogDetail(h: CatalogHit): ApiCard? = withContext(Dispatchers.IO) {
+        var d = TcgDex.detail(h.lang, h.id, eurPerUsd())
+        if (d != null && d.price == null && h.lang != "en") {
+            val e = TcgDex.detail("en", h.id, eurPerUsd())
+            if (e?.price != null) d = d.copy(price = e.price)
+        }
+        d
+    }
+
+    fun addCatalogCard(c: ApiCard, condition: String, qty: Int) {
+        val pid = current?.id ?: return
+        viewModelScope.launch {
+            val ex = dao.byId(pid, c.id)
+            val saved = if (ex != null) {
+                ex.copy(quantity = ex.quantity + qty, price = c.price ?: ex.price)
+            } else {
+                OwnedCard(
+                    profileId = pid, id = c.id, name = c.name, setId = c.setId, setName = c.setName,
+                    setSymbol = c.setSymbol, number = c.number, printedTotal = c.printedTotal,
+                    rarity = c.rarity, imageSmall = c.imageSmall, imageLarge = c.imageLarge,
+                    price = c.price, quantity = qty, condition = condition
+                )
+            }
+            dao.upsert(saved)
+        }
     }
 
     // ================================================================ atualização automática

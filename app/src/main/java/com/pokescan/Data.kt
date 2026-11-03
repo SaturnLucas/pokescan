@@ -46,6 +46,7 @@ data class OwnedCard(
     val imageLarge: String,
     val price: Double?,
     val quantity: Int = 1,
+    val condition: String = "NM",
     val addedAt: Long = System.currentTimeMillis()
 )
 
@@ -120,7 +121,29 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [Profile::class, OwnedCard::class], version = 2, exportSchema = false)
+/** v2 -> v3: cada carta ganha uma condição (NM, SP, MP, HP, D); as cartas existentes viram NM. */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `owned_cards_new` (`profileId` INTEGER NOT NULL, `id` TEXT NOT NULL, " +
+                "`name` TEXT NOT NULL, `setId` TEXT NOT NULL, `setName` TEXT NOT NULL, `setSymbol` TEXT NOT NULL, " +
+                "`number` TEXT NOT NULL, `printedTotal` INTEGER NOT NULL, `rarity` TEXT, " +
+                "`imageSmall` TEXT NOT NULL, `imageLarge` TEXT NOT NULL, `price` REAL, " +
+                "`quantity` INTEGER NOT NULL, `condition` TEXT NOT NULL, `addedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`profileId`, `id`))"
+        )
+        db.execSQL(
+            "INSERT INTO owned_cards_new (profileId, id, name, setId, setName, setSymbol, number, printedTotal, " +
+                "rarity, imageSmall, imageLarge, price, quantity, condition, addedAt) " +
+                "SELECT profileId, id, name, setId, setName, setSymbol, number, printedTotal, rarity, imageSmall, " +
+                "imageLarge, price, quantity, 'NM', addedAt FROM owned_cards"
+        )
+        db.execSQL("DROP TABLE owned_cards")
+        db.execSQL("ALTER TABLE owned_cards_new RENAME TO owned_cards")
+    }
+}
+
+@Database(entities = [Profile::class, OwnedCard::class], version = 3, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): CardDao
 
@@ -130,7 +153,7 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(ctx: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "pokescan.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build().also { inst = it }
         }
     }

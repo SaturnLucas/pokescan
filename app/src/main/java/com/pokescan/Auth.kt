@@ -62,7 +62,7 @@ fun AppLogo(size: Dp = 96.dp) {
     Box(
         Modifier.size(size)
             .clip(RoundedCornerShape(size * 0.24f))
-            .background(Brush.linearGradient(listOf(Color(0xFF2B3270), Color(0xFF0F1220)))),
+            .background(Brush.linearGradient(listOf(Color(0xFF2A2110), Color(0xFF050505)))),
         contentAlignment = Alignment.Center
     ) {
         Image(
