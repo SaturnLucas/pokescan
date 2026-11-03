@@ -45,9 +45,18 @@ class Prefs(ctx: Context) {
         get() = sp.getLong("bioProfile", -1L)
         set(v) { sp.edit().putLong("bioProfile", v).apply() }
 
+    /** Mantém o perfil conectado ao fechar e abrir o app (sem pedir senha). */
+    var keepSignedIn: Boolean
+        get() = sp.getBoolean("keepSignedIn", true)
+        set(v) { sp.edit().putBoolean("keepSignedIn", v).apply() }
+
+    var sessionProfile: Long
+        get() = sp.getLong("sessionProfile", -1L)
+        set(v) { sp.edit().putLong("sessionProfile", v).apply() }
+
     /** Segundos em segundo plano antes de bloquear; -1 = nunca. */
     var lockDelay: Int
-        get() = sp.getInt("lockDelay", 60)
+        get() = sp.getInt("lockDelay", -1)
         set(v) { sp.edit().putInt("lockDelay", v).apply() }
 
     fun getInt(k: String): Int = sp.getInt(k, 0)

@@ -110,7 +110,7 @@ fun AuthGate(vm: MainVM, content: @Composable () -> Unit) {
     val profiles by vm.profiles.collectAsState()
     val list = profiles
     when {
-        list == null -> Box(
+        list == null || vm.restoring -> Box(
             Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
             contentAlignment = Alignment.Center
         ) { CircularProgressIndicator() }

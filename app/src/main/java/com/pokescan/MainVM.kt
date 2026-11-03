@@ -51,6 +51,11 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     var info by mutableStateOf<String?>(null)
     var bioProfileId by mutableStateOf(prefs.bioProfile)
         private set
+    var keepSignedIn by mutableStateOf(prefs.keepSignedIn)
+        private set
+    /** true enquanto o app reabre a sessão salva (evita piscar a tela de login). */
+    var restoring by mutableStateOf(prefs.keepSignedIn && prefs.sessionProfile >= 0)
+        private set
     var lockDelay by mutableIntStateOf(prefs.lockDelay)
         private set
     val lastProfileId: Long get() = prefs.lastProfile
@@ -120,6 +125,20 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    init {
+        val sid = prefs.sessionProfile
+        if (prefs.keepSignedIn && sid >= 0) {
+            viewModelScope.launch {
+                try {
+                    dao.profile(sid)?.let { startSession(it) }
+                } catch (e: Exception) {
+                    // segue para a tela de login
+                }
+                restoring = false
+            }
+        }
+    }
+
     // ================================================================ perfis e login
 
     private fun lockLeftMs(id: Long): Long = max(0L, prefs.getLong("lockUntil_$id") - System.currentTimeMillis())
@@ -128,6 +147,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         current = p
         profileFlow.value = p.id
         prefs.lastProfile = p.id
+        prefs.sessionProfile = if (prefs.keepSignedIn) p.id else -1L
         authError = null
         state = ScanState.Idle
         added = null
@@ -211,7 +231,14 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         bioProfileId = v
     }
 
+    fun changeKeepSignedIn(on: Boolean) {
+        keepSignedIn = on
+        prefs.keepSignedIn = on
+        prefs.sessionProfile = if (on) (current?.id ?: -1L) else -1L
+    }
+
     fun logout() {
+        prefs.sessionProfile = -1L
         current = null
         profileFlow.value = -1L
         state = ScanState.Idle

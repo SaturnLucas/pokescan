@@ -85,6 +85,16 @@ fun SettingsScreen(vm: MainVM) {
             }
 
             SectionCard("🔐 Segurança") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Manter conectado", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Abre direto no seu perfil, sem pedir a senha toda vez. Ao tocar em Sair, a senha volta a ser pedida.",
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(checked = vm.keepSignedIn, onCheckedChange = { vm.changeKeepSignedIn(it) })
+                }
                 if (Biometrics.available(ctx)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -299,36 +309,5 @@ fun SettingsScreen(vm: MainVM) {
             )
         }
 
-        "delete" -> {}
-    }
-
-    if (me != null) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-            var del by remember { mutableStateOf(false) }
-            TextButton(onClick = { del = true }) {
-                Text("🗑️ Excluir este perfil e o deck", color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
-            }
-            if (del) {
-                var pwd by remember { mutableStateOf("") }
-                var err by remember { mutableStateOf<String?>(null) }
-                AlertDialog(
-                    onDismissRequest = { del = false },
-                    title = { Text("Excluir perfil?") },
-                    text = {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Isso apaga o perfil ${me.name} e todas as cartas dele. Não dá para desfazer (a não ser por um backup).", fontSize = 13.sp)
-                            PasswordField(pwd, { pwd = it }, "Confirme com a senha")
-                            err?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
-                        }
-                    },
-                    confirmButton = {
-                        Button(enabled = pwd.isNotEmpty(), onClick = {
-                            vm.deleteCurrentProfile(pwd) { e -> if (e != null) err = e }
-                        }) { Text("Excluir") }
-                    },
-                    dismissButton = { TextButton(onClick = { del = false }) { Text("Cancelar") } }
-                )
-            }
-        }
     }
 }
