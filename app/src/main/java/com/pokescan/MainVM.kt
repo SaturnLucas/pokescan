@@ -65,6 +65,9 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     val cards = profileFlow.flatMapLatest { dao.all(it) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val snapshots = profileFlow.flatMapLatest { dao.snapshots(it) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     // ---- escaneamento ----
     var state by mutableStateOf<ScanState>(ScanState.Idle)
         private set
@@ -135,6 +138,19 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
                     // segue para a tela de login
                 }
                 restoring = false
+            }
+        }
+    }
+
+    init {
+        // Guarda uma foto do valor da coleção por dia (alimenta o gráfico de evolução).
+        viewModelScope.launch {
+            cards.collect { list ->
+                if (list.isNotEmpty()) {
+                    val pid = list.first().profileId
+                    val day = System.currentTimeMillis() / 86_400_000L
+                    dao.upsertSnapshot(Snapshot(pid, day, list.sumOf { valueUsd(it) }))
+                }
             }
         }
     }
@@ -312,7 +328,7 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         put("setSymbol", c.setSymbol); put("number", c.number); put("printedTotal", c.printedTotal)
         put("rarity", c.rarity ?: JSONObject.NULL); put("imageSmall", c.imageSmall)
         put("imageLarge", c.imageLarge); put("price", c.price ?: JSONObject.NULL)
-        put("quantity", c.quantity); put("condition", c.condition); put("addedAt", c.addedAt)
+        put("quantity", c.quantity); put("condition", c.condition); put("favorite", c.favorite); put("buyPrice", c.buyPrice ?: JSONObject.NULL); put("addedAt", c.addedAt)
     }
 
     private fun jsonToCard(pid: Long, o: JSONObject): OwnedCard? {
@@ -332,6 +348,8 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
             price = if (o.isNull("price")) null else o.optDouble("price"),
             quantity = o.optInt("quantity", 1).coerceIn(1, 9999),
             condition = o.optString("condition", "NM").let { if (it in Cond.all) it else "NM" },
+            favorite = o.optBoolean("favorite", false),
+            buyPrice = if (o.isNull("buyPrice")) null else o.optDouble("buyPrice"),
             addedAt = o.optLong("addedAt", System.currentTimeMillis())
         )
     }
@@ -668,6 +686,71 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
                 )
             }
             dao.upsert(saved)
+        }
+    }
+
+
+    // ================================================================ favoritas, preço pago e exportação
+
+    fun toCurrency(usd: Double): Double = usd * (rates[currency] ?: 1.0)
+
+    fun toggleFavorite(c: OwnedCard) {
+        viewModelScope.launch { dao.upsert(c.copy(favorite = !c.favorite)) }
+    }
+
+    /** [text] é o preço pago por unidade, na moeda escolhida. Vazio apaga. */
+    fun setBuyPrice(c: OwnedCard, text: String) {
+        val t = text.trim().replace(',', '.')
+        val usd: Double? = if (t.isEmpty()) null else t.toDoubleOrNull()?.let { it / (rates[currency] ?: 1.0) }
+        if (t.isNotEmpty() && usd == null) return
+        viewModelScope.launch { dao.upsert(c.copy(buyPrice = usd)) }
+    }
+
+    private fun csvField(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
+    private fun csvNum(d: Double?) = if (d == null) "" else String.format(Locale("pt", "BR"), "%.2f", d)
+
+    private fun toCsv(list: List<OwnedCard>): ByteArray {
+        val sb = StringBuilder("\uFEFF")
+        sb.append("Nome;Set;Número;Raridade;Condição;Quantidade;Preço unitário ($currency);Valor total ($currency);")
+        sb.append("Preço pago ($currency);Lucro/prejuízo ($currency);Favorita\n")
+        for (c in list) {
+            val unit = unitValueUsd(c)?.let { toCurrency(it) }
+            val total = unit?.let { it * c.quantity }
+            val paid = c.buyPrice?.let { toCurrency(it) }
+            val pnl = if (unit != null && paid != null) (unit - paid) * c.quantity else null
+            sb.append(
+                listOf(
+                    csvField(c.name), csvField(c.setName), csvField(numLabel(c.number, c.printedTotal)),
+                    csvField(c.rarity ?: ""), c.condition, "${c.quantity}", csvNum(unit), csvNum(total),
+                    csvNum(paid), csvNum(pnl), if (c.favorite) "sim" else "não"
+                ).joinToString(";")
+            ).append("\n")
+        }
+        return sb.toString().toByteArray(Charsets.UTF_8)
+    }
+
+    private fun toJsonExport(list: List<OwnedCard>): ByteArray {
+        val arr = JSONArray()
+        list.forEach { arr.put(cardToJson(it)) }
+        val root = JSONObject().put("app", "PokéScan").put("moeda", currency).put("cartas", arr)
+        return root.toString(2).toByteArray(Charsets.UTF_8)
+    }
+
+    fun exportCollection(uri: Uri, json: Boolean) {
+        val p = current ?: return
+        info = "Exportando…"
+        viewModelScope.launch {
+            try {
+                val n = withContext(Dispatchers.IO) {
+                    val list = dao.snapshot(p.id).sortedBy { it.name.lowercase() }
+                    val bytes = if (json) toJsonExport(list) else toCsv(list)
+                    app.contentResolver.openOutputStream(uri)!!.use { it.write(bytes) }
+                    list.size
+                }
+                info = "✓ $n cartas exportadas em ${if (json) "JSON" else "CSV"}."
+            } catch (e: Exception) {
+                info = "Falha ao exportar: ${e.message}"
+            }
         }
     }
 

@@ -61,6 +61,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -71,6 +72,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 // ================================================================ casca do app
 
@@ -275,6 +279,10 @@ fun HomeScreen(vm: MainVM, onScan: () -> Unit, onBuscar: () -> Unit, onPre: () -
     val totalUsd = cards.sumOf { vm.valueUsd(it) }
     val top = cards.filter { it.price != null }.sortedByDescending { vm.unitValueUsd(it) ?: 0.0 }.take(6)
     val condLabel = if (cards.all { it.condition == "NM" }) "NM" else "Por condição"
+    val snaps by vm.snapshots.collectAsState()
+    val costed = cards.filter { it.buyPrice != null }
+    val cost = costed.sumOf { (it.buyPrice ?: 0.0) * it.quantity }
+    val pnl = costed.sumOf { vm.valueUsd(it) } - cost
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(18.dp))
@@ -337,6 +345,20 @@ fun HomeScreen(vm: MainVM, onScan: () -> Unit, onBuscar: () -> Unit, onPre: () -
                     HomeStat("Posições", "${cards.size}")
                     HomeStat("Com valor", "${cards.count { it.price != null }}")
                 }
+                if (costed.isNotEmpty()) {
+                    Spacer(Modifier.height(14.dp))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(GoldLine))
+                    Spacer(Modifier.height(10.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Lucro / prejuízo", fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val pct = if (cost > 0) pnl / cost * 100 else 0.0
+                        Text(
+                            (if (pnl >= 0) "+" else "−") + vm.money(kotlin.math.abs(pnl)) + "  (" + "%.0f".format(pct) + "%)",
+                            color = if (pnl >= 0) PokeGreen else MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.ExtraBold, fontSize = 16.sp
+                        )
+                    }
+                }
             }
         }
         Spacer(Modifier.height(14.dp))
@@ -346,6 +368,13 @@ fun HomeScreen(vm: MainVM, onScan: () -> Unit, onBuscar: () -> Unit, onPre: () -
             ActionTile("🔍", "Buscar", "Catálogo PT-BR", Modifier.weight(1f), onBuscar)
             ActionTile("✨", "Pré-avaliar", "Condição física", Modifier.weight(1f), onPre)
         }
+
+        Spacer(Modifier.height(26.dp))
+        Kicker("PORTFÓLIO")
+        Spacer(Modifier.height(6.dp))
+        Text("Evolução do valor", fontSize = 25.sp, fontWeight = FontWeight.ExtraBold)
+        Spacer(Modifier.height(12.dp))
+        ValueHistory(vm, snaps)
 
         Spacer(Modifier.height(26.dp))
         Kicker("DESTAQUES DA COLEÇÃO")
@@ -363,6 +392,63 @@ fun HomeScreen(vm: MainVM, onScan: () -> Unit, onBuscar: () -> Unit, onPre: () -
             }
         }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+fun ValueHistory(vm: MainVM, snaps: List<Snapshot>) {
+    val shape = RoundedCornerShape(20.dp)
+    Column(Modifier.fillMaxWidth().clip(shape).background(PanelBg).border(1.dp, GoldLine, shape).padding(16.dp)) {
+        if (snaps.size < 2) {
+            Text(
+                "O gráfico aparece a partir do segundo dia de uso: o app guarda uma foto do valor da coleção por dia.",
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            val vals = snaps.map { vm.toCurrency(it.valueUsd) }
+            val usdDiff = snaps.last().valueUsd - snaps.first().valueUsd
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(vm.money(snaps.last().valueUsd), fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+                Text(
+                    (if (usdDiff >= 0) "▲ " else "▼ ") + vm.money(kotlin.math.abs(usdDiff)),
+                    color = if (usdDiff >= 0) PokeGreen else MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Bold, fontSize = 14.sp
+                )
+            }
+            Canvas(Modifier.fillMaxWidth().height(110.dp).padding(top = 8.dp)) {
+                val mn = vals.minOrNull() ?: 0.0
+                val mx = vals.maxOrNull() ?: 1.0
+                val span = if (mx - mn > 1e-9) mx - mn else 1.0
+                val stepX = size.width / (vals.size - 1)
+                fun yOf(v: Double): Float = size.height - (((v - mn) / span) * size.height * 0.8 + size.height * 0.1).toFloat()
+                val line = Path()
+                val fill = Path()
+                vals.forEachIndexed { i, v ->
+                    val x = i * stepX
+                    val y = yOf(v)
+                    if (i == 0) {
+                        line.moveTo(x, y)
+                        fill.moveTo(x, size.height)
+                        fill.lineTo(x, y)
+                    } else {
+                        line.lineTo(x, y)
+                        fill.lineTo(x, y)
+                    }
+                }
+                fill.lineTo(size.width, size.height)
+                fill.close()
+                drawPath(fill, Brush.verticalGradient(listOf(PokeYellow.copy(alpha = 0.35f), Color.Transparent)))
+                drawPath(line, PokeYellow, style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round))
+                if (vals.size <= 14) {
+                    vals.forEachIndexed { i, v -> drawCircle(PokeYellow, 3.5.dp.toPx(), Offset(i * stepX, yOf(v))) }
+                }
+            }
+            val fmt = SimpleDateFormat("dd/MM", Locale.getDefault())
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(fmt.format(Date(snaps.first().day * 86_400_000L)), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(fmt.format(Date(snaps.last().day * 86_400_000L)), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 

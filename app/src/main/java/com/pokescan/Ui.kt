@@ -18,6 +18,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,6 +38,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -438,13 +442,57 @@ fun ChooseDialog(cards: List<ApiCard>, vm: MainVM, onPick: (ApiCard) -> Unit, on
 
 // ---------------------------------------------------------------- pokédex
 
+/** Símbolo de raridade (estilo das cartas impressas). */
+fun raritySymbol(r: String?): String {
+    val s = (r ?: "").lowercase()
+    return when {
+        s.contains("special illustration") -> "✦✦"
+        s.contains("illustration") -> "✦"
+        s.contains("hyper") || s.contains("secret") -> "★★★"
+        s.contains("ultra") || s.contains("double") -> "★★"
+        s.contains("shiny") -> "✧"
+        s.contains("ace spec") -> "ACE"
+        s.contains("promo") -> "P"
+        s.contains("holo") || s.contains("rare") -> "★"
+        s.contains("uncommon") -> "◆"
+        s.contains("common") -> "●"
+        else -> "•"
+    }
+}
+
+@Composable
+fun RarityBadge(r: String?, modifier: Modifier = Modifier) {
+    if (r == null) return
+    Surface(shape = RoundedCornerShape(50), color = Color(0xCC000000), modifier = modifier) {
+        Text(
+            raritySymbol(r),
+            Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            color = rarityColor(r), fontSize = 11.sp, fontWeight = FontWeight.ExtraBold
+        )
+    }
+}
+
 @Composable
 fun DexScreen(vm: MainVM) {
     val cards by vm.cards.collectAsState()
     var filter by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<String?>(null) }
-    val shown = cards.filter { it.name.contains(filter, true) || it.setName.contains(filter, true) }
-    val total = cards.sumOf { (it.price ?: 0.0) * it.quantity }
+    var sort by remember { mutableIntStateOf(0) }          // 0 recentes, 1 valor, 2 nome
+    var onlyFav by remember { mutableStateOf(false) }
+    var rarity by remember { mutableStateOf<String?>(null) }
+    var layout by remember { mutableIntStateOf(1) }        // 0 = 3 colunas, 1 = 2 colunas, 2 = lista
+    val rarities = cards.mapNotNull { it.rarity }.distinct().sorted()
+
+    var shown = cards.filter {
+        (it.name.contains(filter, true) || it.setName.contains(filter, true)) &&
+            (!onlyFav || it.favorite) && (rarity == null || it.rarity == rarity)
+    }
+    shown = when (sort) {
+        1 -> shown.sortedByDescending { vm.unitValueUsd(it) ?: 0.0 }
+        2 -> shown.sortedBy { it.name.lowercase() }
+        else -> shown
+    }
+    val total = cards.sumOf { vm.valueUsd(it) }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -455,51 +503,37 @@ fun DexScreen(vm: MainVM) {
         OutlinedTextField(
             value = filter,
             onValueChange = { filter = it },
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp),
             singleLine = true,
             shape = RoundedCornerShape(16.dp),
             placeholder = { Text("Filtrar por nome ou set") }
         )
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+            item { Pill("Recentes", sort == 0, true) { sort = 0 } }
+            item { Pill("Valor", sort == 1, true) { sort = 1 } }
+            item { Pill("Nome", sort == 2, true) { sort = 2 } }
+            item { Pill("⭐ Favoritas", onlyFav, true) { onlyFav = !onlyFav } }
+            item { Pill(listOf("▦ 3 colunas", "▦ 2 colunas", "☰ Lista")[layout], false, true) { layout = (layout + 1) % 3 } }
+            items(rarities) { r -> Pill("${raritySymbol(r)} $r", rarity == r, true) { rarity = if (rarity == r) null else r } }
+        }
         if (cards.isEmpty()) {
             Column(Modifier.fillMaxWidth().padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("🃏", fontSize = 56.sp)
                 Text("Sua Pokédex está vazia.\nEscaneie a primeira carta!", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        } else if (shown.isEmpty()) {
+            Text("Nenhuma carta com esses filtros.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
         }
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(104.dp),
+            columns = GridCells.Fixed(when (layout) { 0 -> 3; 1 -> 2; else -> 1 }),
             modifier = Modifier.weight(1f),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(bottom = 12.dp)
         ) {
             items(shown, key = { it.id }) { c ->
-                Box(Modifier.clip(RoundedCornerShape(8.dp)).clickable { selected = c.id }) {
-                    AsyncImage(
-                        model = c.imageSmall,
-                        contentDescription = c.name,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(CARD_RATIO)
-                    )
-                    if (c.quantity > 1) {
-                        Tag("x${c.quantity}", PokeYellow, Modifier.align(Alignment.TopEnd).padding(4.dp))
-                    }
-                    if (c.price != null) {
-                        Box(
-                            Modifier.align(Alignment.BottomCenter)
-                                .fillMaxWidth()
-                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000))))
-                                .padding(top = 14.dp, bottom = 3.dp)
-                        ) {
-                            Text(
-                                vm.money(vm.unitValueUsd(c)),
-                                Modifier.align(Alignment.Center),
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                }
+                if (layout == 2) DexListRow(vm, c) { selected = c.id }
+                else DexGridCard(vm, c) { selected = c.id }
             }
         }
     }
@@ -511,7 +545,75 @@ fun DexScreen(vm: MainVM) {
 }
 
 @Composable
+fun DexGridCard(vm: MainVM, c: OwnedCard, onClick: () -> Unit) {
+    Box(Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick)) {
+        AsyncImage(
+            model = c.imageSmall,
+            contentDescription = c.name,
+            modifier = Modifier.fillMaxWidth().aspectRatio(CARD_RATIO)
+        )
+        Row(Modifier.align(Alignment.TopStart).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            if (c.favorite) Text("⭐", fontSize = 13.sp)
+            RarityBadge(c.rarity)
+        }
+        if (c.quantity > 1) {
+            Tag("x${c.quantity}", PokeYellow, Modifier.align(Alignment.TopEnd).padding(4.dp))
+        }
+        if (c.price != null) {
+            Box(
+                Modifier.align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000))))
+                    .padding(top = 14.dp, bottom = 3.dp)
+            ) {
+                Text(
+                    vm.money(vm.unitValueUsd(c)),
+                    Modifier.align(Alignment.Center),
+                    color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun DexListRow(vm: MainVM, c: OwnedCard, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    Row(
+        Modifier.fillMaxWidth().clip(shape).background(PanelBg).border(1.dp, GoldLine, shape)
+            .clickable(onClick = onClick).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AsyncImage(
+            model = c.imageSmall, contentDescription = c.name,
+            modifier = Modifier.width(54.dp).aspectRatio(CARD_RATIO).clip(RoundedCornerShape(6.dp))
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(c.name, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(
+                "${c.setName} · ${numLabel(c.number, c.printedTotal)}",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                c.rarity?.let { Tag("${raritySymbol(it)} ${c.condition}", rarityColor(it)) }
+                if (c.favorite) Text("⭐", fontSize = 13.sp)
+            }
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(vm.money(vm.unitValueUsd(c)), color = PokeYellow, fontWeight = FontWeight.ExtraBold)
+            Text("x${c.quantity}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
 fun DetailDialog(c: OwnedCard, vm: MainVM, onClose: () -> Unit) {
+    var buyText by remember(c.id) {
+        mutableStateOf(c.buyPrice?.let { "%.2f".format(vm.toCurrency(it)) } ?: "")
+    }
+    val unit = vm.unitValueUsd(c)
+    val paid = c.buyPrice
     AlertDialog(
         onDismissRequest = onClose,
         confirmButton = { TextButton(onClick = onClose) { Text("Fechar") } },
@@ -530,12 +632,32 @@ fun DetailDialog(c: OwnedCard, vm: MainVM, onClose: () -> Unit) {
                 )
                 Text("${c.setName} · ${numLabel(c.number, c.printedTotal)}")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    c.rarity?.let { Tag(it, rarityColor(it)) }
-                    Text(vm.money(vm.unitValueUsd(c)), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    c.rarity?.let { Tag("${raritySymbol(it)} $it", rarityColor(it)) }
+                    Text(vm.money(unit), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                }
+                OutlinedButton(onClick = { vm.toggleFavorite(c) }) {
+                    Text(if (c.favorite) "⭐ Favorita" else "☆ Marcar como favorita")
                 }
                 Text("Condição: ${Cond.label(c.condition)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Cond.all.forEach { code -> Pill(code, c.condition == code, compact = true) { vm.setCondition(c, code) } }
+                }
+                OutlinedTextField(
+                    value = buyText,
+                    onValueChange = { buyText = it },
+                    label = { Text("Preço pago por unidade (${vm.currency})") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedButton(onClick = { vm.setBuyPrice(c, buyText) }) { Text("Salvar preço pago") }
+                if (paid != null && unit != null) {
+                    val diff = (unit - paid) * c.quantity
+                    Text(
+                        (if (diff >= 0) "Lucro: " else "Prejuízo: ") + vm.money(kotlin.math.abs(diff)),
+                        color = if (diff >= 0) PokeGreen else MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedButton(onClick = { vm.setQty(c, c.quantity - 1) }) { Text("−") }

@@ -47,8 +47,15 @@ data class OwnedCard(
     val price: Double?,
     val quantity: Int = 1,
     val condition: String = "NM",
+    val favorite: Boolean = false,
+    /** Preço pago por unidade, em dólar (convertido na hora em que foi digitado). */
+    val buyPrice: Double? = null,
     val addedAt: Long = System.currentTimeMillis()
 )
+
+/** Foto diária do valor da coleção (para o gráfico de evolução). day = dias desde 1970. */
+@Entity(tableName = "snapshots", primaryKeys = ["profileId", "day"])
+data class Snapshot(val profileId: Long, val day: Long, val valueUsd: Double)
 
 @Dao
 interface CardDao {
@@ -75,6 +82,12 @@ interface CardDao {
 
     @Query("UPDATE owned_cards SET profileId = :pid WHERE profileId = 0")
     suspend fun adoptLegacy(pid: Long)
+
+    @Query("SELECT * FROM snapshots WHERE profileId = :pid ORDER BY day")
+    fun snapshots(pid: Long): Flow<List<Snapshot>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertSnapshot(s: Snapshot)
 
     @Query("SELECT * FROM profiles ORDER BY id")
     fun profiles(): Flow<List<Profile>>
@@ -143,7 +156,33 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
-@Database(entities = [Profile::class, OwnedCard::class], version = 3, exportSchema = false)
+/** v3 -> v4: favoritas, preço pago (lucro/prejuízo) e histórico diário do valor. */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `owned_cards_new` (`profileId` INTEGER NOT NULL, `id` TEXT NOT NULL, " +
+                "`name` TEXT NOT NULL, `setId` TEXT NOT NULL, `setName` TEXT NOT NULL, `setSymbol` TEXT NOT NULL, " +
+                "`number` TEXT NOT NULL, `printedTotal` INTEGER NOT NULL, `rarity` TEXT, " +
+                "`imageSmall` TEXT NOT NULL, `imageLarge` TEXT NOT NULL, `price` REAL, " +
+                "`quantity` INTEGER NOT NULL, `condition` TEXT NOT NULL, `favorite` INTEGER NOT NULL, " +
+                "`buyPrice` REAL, `addedAt` INTEGER NOT NULL, PRIMARY KEY(`profileId`, `id`))"
+        )
+        db.execSQL(
+            "INSERT INTO owned_cards_new (profileId, id, name, setId, setName, setSymbol, number, printedTotal, " +
+                "rarity, imageSmall, imageLarge, price, quantity, condition, favorite, buyPrice, addedAt) " +
+                "SELECT profileId, id, name, setId, setName, setSymbol, number, printedTotal, rarity, imageSmall, " +
+                "imageLarge, price, quantity, condition, 0, NULL, addedAt FROM owned_cards"
+        )
+        db.execSQL("DROP TABLE owned_cards")
+        db.execSQL("ALTER TABLE owned_cards_new RENAME TO owned_cards")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `snapshots` (`profileId` INTEGER NOT NULL, `day` INTEGER NOT NULL, " +
+                "`valueUsd` REAL NOT NULL, PRIMARY KEY(`profileId`, `day`))"
+        )
+    }
+}
+
+@Database(entities = [Profile::class, OwnedCard::class, Snapshot::class], version = 4, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): CardDao
 
@@ -153,7 +192,7 @@ abstract class AppDb : RoomDatabase() {
 
         fun get(ctx: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(ctx.applicationContext, AppDb::class.java, "pokescan.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build().also { inst = it }
         }
     }

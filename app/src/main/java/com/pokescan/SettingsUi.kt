@@ -61,6 +61,12 @@ fun SettingsScreen(vm: MainVM) {
         if (uri != null) vm.importBackup(uri, pendingPwd)
         pendingPwd = ""
     }
+    val csvDoc = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        if (uri != null) vm.exportCollection(uri, false)
+    }
+    val jsonDoc = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) vm.exportCollection(uri, true)
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -151,6 +157,15 @@ fun SettingsScreen(vm: MainVM) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = { dialog = "export" }) { Text("Exportar") }
                     OutlinedButton(onClick = { dialog = "import" }) { Text("Importar") }
+                }
+                Text(
+                    "Planilha ou JSON (sem senha, para abrir no Excel/Google Planilhas):",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val safeName = (me.name).replace(Regex("[^A-Za-z0-9_-]"), "_")
+                    OutlinedButton(onClick = { vm.holdLock(); csvDoc.launch("pokescan-$safeName.csv") }) { Text("Exportar CSV") }
+                    OutlinedButton(onClick = { vm.holdLock(); jsonDoc.launch("pokescan-$safeName.json") }) { Text("Exportar JSON") }
                 }
                 vm.info?.let { Text(it, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary) }
             }
