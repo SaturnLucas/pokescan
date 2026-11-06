@@ -1,0 +1,49 @@
+name: Índice visual de cartas
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 1 * *'
+
+permissions:
+  contents: write
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Dependências
+        run: pip install mediapipe pillow numpy requests
+      - name: Modelo MobileNetV3 (MediaPipe)
+        run: |
+          B=https://storage.googleapis.com/mediapipe-models/image_embedder/mobilenet_v3_small/float32
+          curl -fL "$B/latest/mobilenet_v3_small.tflite" -o model.tflite || curl -fL "$B/1/mobilenet_v3_small.tflite" -o model.tflite
+          ls -la model.tflite
+      - name: Garantir a release do índice
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view index --repo ${{ github.repository }} >/dev/null 2>&1 || \
+          gh release create index --repo ${{ github.repository }} --prerelease --title "Índice visual de cartas" --notes "Gerando…"
+      - name: Gerar o índice
+        run: |
+          set -o pipefail
+          python tools/build_index.py 2>&1 | tee build.log
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload index cardindex.bin --clobber --repo ${{ github.repository }}
+          gh release edit index --repo ${{ github.repository }} --notes-file report.md
+      - name: Relatar erro
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { echo "Falha ao gerar o índice:"; echo '```'; tail -n 60 build.log; echo '```'; } > err.md
+          gh release edit index --repo ${{ github.repository }} --notes-file err.md
