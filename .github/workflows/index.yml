@@ -18,7 +18,10 @@ jobs:
         with:
           python-version: '3.11'
       - name: Dependências
-        run: pip install mediapipe pillow numpy requests
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y libegl1 libgles2 libgl1 libglib2.0-0
+          pip install mediapipe pillow numpy requests
       - name: Modelo MobileNetV3 (MediaPipe)
         run: |
           B=https://storage.googleapis.com/mediapipe-models/image_embedder/mobilenet_v3_small/float32
