@@ -8,11 +8,11 @@ Gera o índice visual de cartas do PokéScan.
 5. Grava cardindex.bin (para o app baixar) e report.md.
 
 Formato do cardindex.bin (little-endian):
-  "PSIX" | version u32 | N u32 | DIN u32 | D u32 | thr f32
+  "PSIX" | version u32 | N u32 | DIN u32 | D u32 | thr f32 | sha256 do modelo (32 bytes)
   mean f32[DIN] | proj f32[DIN*D] (linhas = DIN) | vecs i8[N*D]
   meta_len u32 | meta utf-8: N linhas "id \t nome \t número \t imagemBase"
 """
-import io, os, random, struct, sys, time
+import hashlib, io, os, random, struct, sys, time
 import concurrent.futures as cf
 
 import numpy as np
@@ -163,6 +163,7 @@ meta = "\n".join(
 with open("cardindex.bin", "wb") as f:
     f.write(b"PSIX")
     f.write(struct.pack("<IIIIf", 1, N, DIN, D, thr))
+    f.write(hashlib.sha256(open(MODEL, "rb").read()).digest())
     f.write(mean.astype("<f4").tobytes())
     f.write(proj.astype("<f4").tobytes())
     f.write(Q.tobytes())
