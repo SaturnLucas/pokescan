@@ -20,6 +20,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
+      - name: Modelo de imagem (publicado junto do índice)
+        continue-on-error: true
+        run: |
+          mkdir -p app/src/main/assets
+          curl -fL "https://github.com/${{ github.repository }}/releases/download/index/mobilenet_v3_small.tflite" \
+            -o app/src/main/assets/mobilenet_v3_small.tflite || rm -f app/src/main/assets/mobilenet_v3_small.tflite
+          ls -la app/src/main/assets || true
       - name: Restaurar chave de assinatura
         env:
           KS: ${{ secrets.KEYSTORE_B64 }}

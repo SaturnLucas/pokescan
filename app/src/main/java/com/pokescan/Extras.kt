@@ -59,6 +59,14 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("lockDelay", -1)
         set(v) { sp.edit().putInt("lockDelay", v).apply() }
 
+    var visualOn: Boolean
+        get() = sp.getBoolean("visualOn", true)
+        set(v) { sp.edit().putBoolean("visualOn", v).apply() }
+
+    var indexStamp: String
+        get() = sp.getString("indexStamp", "") ?: ""
+        set(v) { sp.edit().putString("indexStamp", v).apply() }
+
     fun getInt(k: String): Int = sp.getInt(k, 0)
     fun putInt(k: String, v: Int) { sp.edit().putInt(k, v).apply() }
     fun getLong(k: String): Long = sp.getLong(k, 0L)

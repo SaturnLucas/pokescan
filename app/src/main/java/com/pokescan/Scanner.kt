@@ -1,5 +1,8 @@
 package com.pokescan
 
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Size
 import androidx.camera.core.Camera
@@ -57,26 +60,69 @@ object OcrParser {
             .trim()
 }
 
-/** Lê os quadros da câmera continuamente (2 por segundo) e manda o texto para o ViewModel. */
+/**
+ * Lê os quadros da câmera: OCR do número (2x por segundo) e, quando pedido, o reconhecimento
+ * por imagem (1x por segundo): recorta a moldura, calcula o vetor e busca no índice.
+ */
 class FrameAnalyzer(
+    private val ctx: Context,
     private val rec: TextRecognizer,
     private val enabled: () -> Boolean,
-    private val onResult: (Parsed) -> Unit
+    private val onResult: (Parsed) -> Unit,
+    private val visualWanted: () -> Boolean,
+    private val guide: () -> Guide?,
+    private val onVisual: (List<VisualHit>) -> Unit,
+    private val onVisualError: (String) -> Unit
 ) : ImageAnalysis.Analyzer {
     private var last = 0L
+    private var lastVis = 0L
+    private var embedder: VisualEmbedder? = null
+    private val main = Handler(Looper.getMainLooper())
 
     override fun analyze(image: ImageProxy) {
         val now = SystemClock.elapsedRealtime()
         val media = image.image
-        if (media == null || !enabled() || now - last < 500) {
+        val wantOcr = media != null && enabled() && now - last >= 500
+        val wantVis = visualWanted() && now - lastVis >= 900
+        if (!wantOcr && !wantVis) {
             image.close()
             return
         }
-        last = now
-        val input = InputImage.fromMediaImage(media, image.imageInfo.rotationDegrees)
-        rec.process(input)
-            .addOnSuccessListener { onResult(OcrParser.parse(it)) }
-            .addOnCompleteListener { image.close() }
+        if (wantVis) {
+            lastVis = now
+            runVisual(image)
+        }
+        if (wantOcr && media != null) {
+            last = now
+            val input = InputImage.fromMediaImage(media, image.imageInfo.rotationDegrees)
+            rec.process(input)
+                .addOnSuccessListener { onResult(OcrParser.parse(it)) }
+                .addOnCompleteListener { image.close() }
+        } else {
+            image.close()
+        }
+    }
+
+    private fun runVisual(image: ImageProxy) {
+        try {
+            val d = VisualIndex.data ?: return
+            val g = guide() ?: return
+            val emb = embedder ?: VisualEmbedder(ctx).also { embedder = it }
+            val bmp = VisualEmbedder.cropGuide(image, g)
+            val e = emb.embedViews(bmp, d.mode) ?: return
+            if (e.size != d.din) throw IllegalStateException("Índice incompatível com este app. Atualize o índice.")
+            val hits = VisualIndex.search(d, VisualIndex.project(d, e), 8)
+            main.post { onVisual(hits) }
+        } catch (t: Throwable) {
+            embedder = null
+            val msg = if (t is java.io.FileNotFoundException) "Modelo de imagem ausente neste app." else (t.message ?: t.javaClass.simpleName)
+            main.post { onVisualError(msg) }
+        }
+    }
+
+    fun close() {
+        embedder?.close()
+        embedder = null
     }
 }
 

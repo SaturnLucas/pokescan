@@ -16,7 +16,11 @@ android {
         targetSdk = 34
         versionCode = vc
         versionName = "1.$vc"
+        // Só 64 bits: o MediaPipe e o ML Kit trazem bibliotecas nativas grandes por arquitetura.
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
+
+    androidResources { noCompress += "tflite" }
 
     signingConfigs {
         create("release") {
@@ -69,6 +73,7 @@ dependencies {
     implementation("androidx.camera:camera-view:$camerax")
 
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mediapipe:tasks-vision:0.10.14")
 
     val room = "2.6.1"
     implementation("androidx.room:room-runtime:$room")

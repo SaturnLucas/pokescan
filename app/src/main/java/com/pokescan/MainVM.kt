@@ -1,6 +1,8 @@
 package com.pokescan
 
 import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
@@ -12,6 +14,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.flatMapLatest
@@ -88,6 +91,35 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
     val wantsFrames: Boolean
         get() = current != null && state == ScanState.Idle && (autoScan || forceNext)
 
+    // ---- reconhecimento por imagem ----
+    var visualOn by mutableStateOf(prefs.visualOn)
+        private set
+    var visualBroken by mutableStateOf(false)
+        private set
+    var visualError by mutableStateOf<String?>(null)
+        private set
+    var indexCount by mutableIntStateOf(0)
+        private set
+    var indexStatus by mutableStateOf<String?>(null)
+        private set
+    var indexBusy by mutableStateOf(false)
+        private set
+
+    /** Área da moldura na tela (atualizada pela tela de scan). */
+    @Volatile
+    var guide: Guide? = null
+
+    @Volatile
+    private var forceVisual = false
+    private var visStable: String? = null
+    private var visCount = 0
+    private var lockedVisual: String? = null
+    private var ocrMiss = 0
+
+    val visualReady: Boolean get() = visualOn && indexCount > 0 && !visualBroken
+    val wantsVisual: Boolean
+        get() = current != null && visualReady && state == ScanState.Idle && guide != null && (autoScan || forceVisual)
+
     // ---- ajustes ----
     var currency by mutableStateOf(prefs.currency)
         private set
@@ -153,6 +185,10 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    init {
+        updateIndex(false)
     }
 
     // ================================================================ perfis e login
@@ -480,12 +516,14 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
         }
         val key = if (p.number != null && p.total != null) "${p.number}/${p.total}" else null
         if (key == null) {
+            ocrMiss++
             if (now - lastSeen > 1500) lockedKey = null
             candKey = null
             candCount = 0
             return
         }
         lastSeen = now
+        ocrMiss = 0
         if (key == lockedKey) return
         if (key == candKey) candCount++ else { candKey = key; candCount = 1 }
         if (candCount >= 2) {
@@ -751,6 +789,126 @@ class MainVM(private val app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 info = "Falha ao exportar: ${e.message}"
             }
+        }
+    }
+
+
+    // ================================================================ reconhecimento por imagem
+
+    fun changeVisual(on: Boolean) {
+        visualOn = on
+        prefs.visualOn = on
+        if (on) { visualBroken = false; visualError = null }
+    }
+
+    fun onVisualBroken(msg: String) {
+        visualBroken = true
+        visualError = msg
+    }
+
+    private fun describeIndex(): String = "Índice com ${VisualIndex.data?.n ?: 0} cartas."
+
+    private fun isMetered(): Boolean = try {
+        (app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager).isActiveNetworkMetered
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Carrega o índice salvo e, se houver versão nova (ou nenhum), baixa. [manual] = botão em Ajustes. */
+    fun updateIndex(manual: Boolean) {
+        if (indexBusy) return
+        indexBusy = true
+        viewModelScope.launch {
+            try {
+                if (indexCount == 0) {
+                    val ok = withContext(Dispatchers.IO) { VisualIndex.load(app) }
+                    if (ok) { indexCount = VisualIndex.data?.n ?: 0; indexStatus = describeIndex() }
+                }
+                if (manual) indexStatus = "Procurando o índice…"
+                val r = withContext(Dispatchers.IO) { IndexUpdater.remote() }
+                if (r == null) {
+                    if (manual || indexCount == 0) indexStatus = "O índice ainda não foi publicado. Tente mais tarde."
+                    return@launch
+                }
+                if (indexCount == 0 || prefs.indexStamp != r.stamp) {
+                    if (!manual && isMetered()) {
+                        indexStatus = "Há um índice novo (${r.size / 1_000_000} MB). Baixe no Wi-Fi em Perfil."
+                        return@launch
+                    }
+                    indexStatus = "Baixando o índice…"
+                    val ok = withContext(Dispatchers.IO) { IndexUpdater.download(app, r) && VisualIndex.load(app) }
+                    if (ok) {
+                        prefs.indexStamp = r.stamp
+                        indexCount = VisualIndex.data?.n ?: 0
+                        visualBroken = false
+                        visualError = null
+                        indexStatus = describeIndex()
+                    } else {
+                        indexStatus = "Falha ao instalar o índice."
+                    }
+                } else if (manual) {
+                    indexStatus = "O índice já está atualizado. " + describeIndex()
+                }
+            } catch (e: Exception) {
+                if (manual) indexStatus = "Não consegui baixar o índice: ${e.message}"
+            } finally {
+                indexBusy = false
+            }
+        }
+    }
+
+    /** Botão 🧠: identifica a carta pela imagem, agora. */
+    fun identifyVisual() {
+        if (current == null || state != ScanState.Idle) return
+        if (!visualOn) { message = "Ligue o reconhecimento por imagem em Perfil."; return }
+        if (indexCount == 0) { message = "Baixe o índice de imagens em Perfil → Reconhecimento por imagem."; return }
+        if (visualBroken) { message = visualError ?: "Reconhecimento por imagem indisponível."; return }
+        forceVisual = true
+        message = null
+        viewModelScope.launch {
+            delay(4000)
+            if (forceVisual) {
+                forceVisual = false
+                message = "Não consegui ver a carta. Enquadre-a na moldura e tente de novo."
+            }
+        }
+    }
+
+    /** Resultado do reconhecimento por imagem (as cartas mais parecidas, da mais para a menos). */
+    fun onVisual(hits: List<VisualHit>) {
+        if (current == null || state != ScanState.Idle || hits.isEmpty()) return
+        if (forceVisual) {
+            forceVisual = false
+            showVisualChoices(hits)
+            return
+        }
+        val top = hits[0]
+        val thr = VisualIndex.data?.thr ?: 0.8f
+        if (!autoScan || ocrMiss < 3 || top.score < thr) {
+            visCount = 0
+            if (top.score < thr) lockedVisual = null
+            return
+        }
+        if (top.entry.id == visStable) visCount++ else { visStable = top.entry.id; visCount = 1 }
+        if (visCount >= 3 && top.entry.id != lockedVisual) {
+            lockedVisual = top.entry.id
+            visCount = 0
+            showVisualChoices(hits)
+        }
+    }
+
+    private fun detailAny(id: String): ApiCard? = try {
+        TcgDex.detail("pt-br", id, eurPerUsd()) ?: TcgDex.detail("pt", id, eurPerUsd()) ?: TcgDex.detail("en", id, eurPerUsd())
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun showVisualChoices(hits: List<VisualHit>) {
+        state = ScanState.Loading
+        viewModelScope.launch {
+            val cards = withContext(Dispatchers.IO) { hits.take(6).mapNotNull { detailAny(it.entry.id) } }
+            if (cards.isEmpty()) fail("Reconheci a arte, mas não consegui abrir as cartas. Tente de novo.")
+            else state = ScanState.Choose(cards)
         }
     }
 

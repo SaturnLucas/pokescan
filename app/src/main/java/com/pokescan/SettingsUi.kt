@@ -211,6 +211,29 @@ fun SettingsScreen(vm: MainVM) {
             }
         }
 
+        SectionCard("🧠 Reconhecimento por imagem") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Identificar pela arte da carta", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Quando o número não é lido (brilho, holo, carta torta), o app compara a imagem com um índice de cartas e mostra as mais parecidas. Toque em 🧠 na tela Scan.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = vm.visualOn, onCheckedChange = { vm.changeVisual(it) })
+            }
+            Text(
+                vm.indexStatus ?: (if (vm.indexCount > 0) "Índice com ${vm.indexCount} cartas." else "Índice ainda não baixado."),
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (vm.visualBroken) {
+                Text("⚠ ${vm.visualError ?: "Indisponível"}", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+            }
+            OutlinedButton(enabled = !vm.indexBusy, onClick = { vm.updateIndex(true) }) {
+                Text(if (vm.indexCount > 0) "Atualizar índice" else "Baixar índice")
+            }
+        }
+
         SectionCard("🌐 Fontes de dados") {
             Text(
                 "• Scan: pokemontcg.io (principal) → TCGdex (reserva) → Poke API Brasil (por nome)\n" +

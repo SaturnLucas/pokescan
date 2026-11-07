@@ -65,6 +65,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -76,6 +77,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlendMode
@@ -100,6 +102,15 @@ import java.util.Date
 import java.util.Locale
 
 const val CARD_RATIO = 0.716f
+
+/** Moldura do scan: [esquerda, topo, largura, altura] em pixels, para uma área de w x h. */
+fun guideRect(w: Float, h: Float): FloatArray {
+    val maxW = w * 0.82f
+    val maxH = h * 0.66f
+    val fw = if (maxW / CARD_RATIO > maxH) maxH * CARD_RATIO else maxW
+    val fh = fw / CARD_RATIO
+    return floatArrayOf((w - fw) / 2f, (h - fh) / 2f - h * 0.05f, fw, fh)
+}
 
 // ---------------------------------------------------------------- app
 
@@ -218,7 +229,13 @@ fun ScanScreen(vm: MainVM) {
     }
 
     val recognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
-    val analyzer = remember { FrameAnalyzer(recognizer, { vm.wantsFrames }, { vm.onFrame(it) }) }
+    val analyzer = remember {
+        FrameAnalyzer(
+            ctx.applicationContext, recognizer, { vm.wantsFrames }, { vm.onFrame(it) },
+            { vm.wantsVisual }, { vm.guide }, { vm.onVisual(it) }, { vm.onVisualBroken(it) }
+        )
+    }
+    DisposableEffect(Unit) { onDispose { analyzer.close() } }
     var torch by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
@@ -258,13 +275,23 @@ fun ScanScreen(vm: MainVM) {
     Box(Modifier.fillMaxSize()) {
         CameraPreview(analyzer, torch, Modifier.fillMaxSize())
 
-        Canvas(Modifier.fillMaxSize().graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)) {
-            val maxW = size.width * 0.82f
-            val maxH = size.height * 0.66f
-            val fw = if (maxW / CARD_RATIO > maxH) maxH * CARD_RATIO else maxW
-            val fh = fw / CARD_RATIO
-            val left = (size.width - fw) / 2f
-            val top = (size.height - fh) / 2f - size.height * 0.05f
+        Canvas(
+            Modifier.fillMaxSize()
+                .onSizeChanged { sz ->
+                    val w = sz.width.toFloat()
+                    val h = sz.height.toFloat()
+                    if (w > 0f && h > 0f) {
+                        val g = guideRect(w, h)
+                        vm.guide = Guide(g[0] / w, g[1] / h, g[2] / w, g[3] / h, w / h)
+                    }
+                }
+                .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+        ) {
+            val g = guideRect(size.width, size.height)
+            val left = g[0]
+            val top = g[1]
+            val fw = g[2]
+            val fh = g[3]
             val r = 18.dp.toPx()
 
             drawRect(Color(0xB3000000))
@@ -342,6 +369,7 @@ fun ScanScreen(vm: MainVM) {
                 RoundIcon("🔦", active = torch) { torch = !torch }
                 RoundIcon(if (vm.autoScan) "⚡" else "✋", active = vm.autoScan) { vm.changeAutoScan(!vm.autoScan) }
                 RoundIcon("🔎") { showSearch = true }
+                if (vm.visualReady) RoundIcon("🧠") { vm.identifyVisual() }
             }
         }
     }
